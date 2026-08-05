@@ -42,6 +42,24 @@
         <help>Allow updates via the RDNC key named "rndc-key". The key is shown in the general tab.</help>
     </field>
     <field>
+        <id>domain.updatekeys</id>
+        <label>RFC2136 Update Keys</label>
+        <type>select_multiple</type>
+        <help>TSIG keys allowed to update this zone. TXT-only updates are recommended for ACME DNS-01.</help>
+    </field>
+    <field>
+        <id>domain.updatepolicy</id>
+        <label>RFC2136 Update Policy</label>
+        <type>dropdown</type>
+        <help>Restrict dynamic updates to TXT records unless other record types are explicitly required.</help>
+    </field>
+    <field>
+        <id>domain.dnssec</id>
+        <label>DNSSEC</label>
+        <type>checkbox</type>
+        <help>Enable BIND automatic DNSSEC signing with the default policy and inline signing.</help>
+    </field>
+    <field>
         <id>domain.ttl</id>
         <label>TTL</label>
         <type>text</type>

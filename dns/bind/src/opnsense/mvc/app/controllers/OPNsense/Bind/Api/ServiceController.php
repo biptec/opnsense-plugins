@@ -36,6 +36,7 @@ use OPNsense\Core\Backend;
 use OPNsense\Bind\General;
 use OPNsense\Bind\Dnsbl;
 use OPNsense\Bind\Domain;
+use OPNsense\Bind\Tsig;
 use OPNsense\Bind\View;
 
 /**
@@ -118,6 +119,17 @@ class ServiceController extends ApiMutableServiceControllerBase
             }
         }
 
+        $tsigModel = new Tsig();
+        $tsigRoot = $tsigModel->getNodeByReference('keys.key');
+        $enabledTsigKeys = [];
+        if ($tsigRoot !== null) {
+            foreach ($tsigRoot->iterateItems() as $key) {
+                if ((string)$key->enabled === '1') {
+                    $enabledTsigKeys[$key->getAttribute('uuid')] = (string)$key->name;
+                }
+            }
+        }
+
         $domainModel = new Domain();
         $domainRoot = $domainModel->getNodeByReference('domains.domain');
         $zoneNames = [];
@@ -137,6 +149,20 @@ class ServiceController extends ApiMutableServiceControllerBase
                         gettext('Configuration exception')
                     );
                 }
+                if ((string)$domain->type === 'primary' && (string)$domain->updatekeys !== '') {
+                    foreach (explode(',', (string)$domain->updatekeys) as $keyUuid) {
+                        if (!isset($enabledTsigKeys[$keyUuid])) {
+                            throw new UserException(
+                                sprintf(
+                                    gettext('Zone "%s" references a missing or disabled TSIG key.'),
+                                    (string)$domain->domainname
+                                ),
+                                gettext('Configuration exception')
+                            );
+                        }
+                    }
+                }
+
                 $key = $viewUuid . ':' . $domainName;
                 if (isset($zoneNames[$key])) {
                     throw new UserException(
