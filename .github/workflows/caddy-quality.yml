@@ -1,0 +1,52 @@
+name: os-caddy quality
+
+on:
+  pull_request:
+    paths:
+      - "www/caddy/**"
+      - ".github/workflows/caddy-quality.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "www/caddy/**"
+      - ".github/workflows/caddy-quality.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install PHP CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli
+
+      - name: Validate PHP
+        run: |
+          find www/caddy/src/opnsense/mvc/app -name '*.php' -print0 \
+            | xargs -0 -r -n1 php -l
+
+      - name: Validate XML
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          for path in sorted(Path("www/caddy/src/opnsense/mvc/app").rglob("*.xml")):
+              ET.parse(path)
+              print(f"XML OK: {path}")
+          PY
+
+      - name: Run model unit tests
+        run: python3 -m unittest www/caddy/tests/test_header_validation.py
+
+      - name: Check whitespace
+        run: git diff --check
