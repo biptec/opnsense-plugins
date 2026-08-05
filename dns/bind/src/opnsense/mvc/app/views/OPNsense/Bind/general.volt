@@ -31,6 +31,8 @@
     <li class="active"><a data-toggle="tab" href="#general">{{ lang._('General') }}</a></li>
     <li><a data-toggle="tab" href="#dnsbl">{{ lang._('DNSBL') }}</a></li>
     <li><a data-toggle="tab" href="#acls">{{ lang._('ACLs') }}</a></li>
+    <li><a data-toggle="tab" href="#views">{{ lang._('Views') }}</a></li>
+    <li><a data-toggle="tab" href="#tsig-keys">{{ lang._('TSIG Keys') }}</a></li>
     <li><a data-toggle="tab" href="#primary-domains">{{ lang._('Primary Zones') }}</a></li>
     <li><a data-toggle="tab" href="#secondary-domains">{{ lang._('Secondary Zones') }}</a></li>
     <li><a data-toggle="tab" href="#forward-domains">{{ lang._('Forward Zones') }}</a></li>
@@ -84,6 +86,69 @@
             <br /><br />
         </div>
     </div>
+    <div id="views" class="tab-pane fade in">
+        <div id="views-area" class="table-responsive">
+            <table id="grid-views" class="table table-condensed table-hover table-striped" data-editDialog="dialogEditBindView">
+                <thead>
+                    <tr>
+                        <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="sequence" data-type="numeric" data-visible="true">{{ lang._('Sequence') }}</th>
+                        <th data-column-id="name" data-type="string" data-visible="true">{{ lang._('Name') }}</th>
+                        <th data-column-id="matchany" data-type="string" data-visible="true">{{ lang._('Match any') }}</th>
+                        <th data-column-id="recursion" data-type="string" data-visible="true">{{ lang._('Recursion') }}</th>
+                        <th data-column-id="allowqueryany" data-type="string" data-visible="true">{{ lang._('Public queries') }}</th>
+                        <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
+                        <th data-column-id="commands" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="7"></td>
+                        <td>
+                            <button data-action="add" type="button" class="btn btn-xs btn-default"><span class="fa fa-plus"></span></button>
+                            <button data-action="deleteSelected" type="button" class="btn btn-xs btn-default"><span class="fa fa-trash-o"></span></button>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <div class="col-md-12">
+            <div class="alert alert-info">{{ lang._('When at least one view is enabled, every enabled zone must be assigned to an enabled view. Views are evaluated by sequence; a match-any view must be last.') }}</div>
+            <button class="btn btn-primary" id="saveAct_view" type="button"><b>{{ lang._('Save') }}</b> <i id="saveAct_view_progress"></i></button>
+            <br /><br />
+        </div>
+    </div>
+    <div id="tsig-keys" class="tab-pane fade in">
+        <div id="tsig-keys-area" class="table-responsive">
+            <table id="grid-tsig-keys" class="table table-condensed table-hover table-striped" data-editDialog="dialogEditBindTsig">
+                <thead>
+                    <tr>
+                        <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="name" data-type="string" data-visible="true">{{ lang._('Name') }}</th>
+                        <th data-column-id="algorithm" data-type="string" data-visible="true">{{ lang._('Algorithm') }}</th>
+                        <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
+                        <th data-column-id="commands" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="4"></td>
+                        <td>
+                            <button data-action="add" type="button" class="btn btn-xs btn-default"><span class="fa fa-plus"></span></button>
+                            <button data-action="deleteSelected" type="button" class="btn btn-xs btn-default"><span class="fa fa-trash-o"></span></button>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <div class="col-md-12">
+            <div class="alert alert-warning">{{ lang._('TSIG secrets are credentials. Store matching client copies securely and never expose them in logs or source control.') }}</div>
+            <button class="btn btn-primary" id="saveAct_tsig" type="button"><b>{{ lang._('Save') }}</b> <i id="saveAct_tsig_progress"></i></button>
+            <br /><br />
+        </div>
+    </div>
     <div id="primary-domains" class="tab-pane fade in">
         <div class="col-md-12">
             <h2>{{ lang._('Zones') }}</h2>
@@ -93,6 +158,7 @@
                 <thead>
                     <tr>
                         <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="view" data-type="string" data-visible="true">{{ lang._('View') }}</th>
                         <th data-column-id="domainname" data-type="string" data-visible="true" data-css-class="zonename">{{ lang._('Zone') }}</th>
                         <th data-column-id="ttl" data-type="string" data-visible="true">{{ lang._('TTL') }}</th>
                         <th data-column-id="refresh" data-type="string" data-visible="true">{{ lang._('Refresh') }}</th>
@@ -163,6 +229,7 @@
                 <thead>
                     <tr>
                         <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="view" data-type="string" data-visible="true">{{ lang._('View') }}</th>
                         <th data-column-id="domainname" data-type="string" data-visible="true">{{ lang._('Zone') }}</th>
                         <th data-column-id="primaryip" data-type="string" data-visible="true">{{ lang._('Primary IPs') }}</th>
                         <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
@@ -199,6 +266,7 @@
                 <thead>
                     <tr>
                         <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                        <th data-column-id="view" data-type="string" data-visible="true">{{ lang._('View') }}</th>
                         <th data-column-id="domainname" data-type="string" data-visible="true">{{ lang._('Zone') }}</th>
                         <th data-column-id="forwardserver" data-type="string" data-visible="true">{{ lang._('Forwarder IPs') }}</th>
                         <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
@@ -229,6 +297,8 @@
 </div>
 
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindAcl,'id':'dialogEditBindAcl','label':lang._('Edit ACL')])}}
+{{ partial("layout_partials/base_dialog",['fields':formDialogEditBindView,'id':'dialogEditBindView','label':lang._('Edit View')])}}
+{{ partial("layout_partials/base_dialog",['fields':formDialogEditBindTsig,'id':'dialogEditBindTsig','label':lang._('Edit TSIG Key')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindPrimaryDomain,'id':'dialogEditBindPrimaryDomain','label':lang._('Edit Primary Zone')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindSecondaryDomain,'id':'dialogEditBindSecondaryDomain','label':lang._('Edit Secondary Zone')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindForwardDomain,'id':'dialogEditBindForwardDomain','label':lang._('Edit Forward Zone')])}}
@@ -268,9 +338,10 @@
     }
 </style>
 <script>
-function zone_test(zonename) {
+function zone_test(zonename, zoneuuid) {
     let payload = {
         'zone': zonename,
+        'uuid': zoneuuid,
     };
     ajaxCall(url = "/api/bind/general/zonetest/", payload, callback = function(data, status) {
         if (data['response'].indexOf('Zone check completed successfully') == -1) {
@@ -400,6 +471,24 @@ $(document).ready(function() {
         'toggle': '/api/bind/acl/toggle_acl/'
     });
 
+    $("#grid-views").UIBootgrid({
+        'search': '/api/bind/view/search_view',
+        'get': '/api/bind/view/get_view/',
+        'set': '/api/bind/view/set_view/',
+        'add': '/api/bind/view/add_view/',
+        'del': '/api/bind/view/del_view/',
+        'toggle': '/api/bind/view/toggle_view/'
+    });
+
+    $("#grid-tsig-keys").UIBootgrid({
+        'search': '/api/bind/tsig/search_key',
+        'get': '/api/bind/tsig/get_key/',
+        'set': '/api/bind/tsig/set_key/',
+        'add': '/api/bind/tsig/add_key/',
+        'del': '/api/bind/tsig/del_key/',
+        'toggle': '/api/bind/tsig/toggle_key/'
+    });
+
     $("#grid-primary-domains").UIBootgrid({
         'search': '/api/bind/domain/search_primary_domain',
         'get': '/api/bind/domain/get_domain/',
@@ -428,8 +517,10 @@ $(document).ready(function() {
         // Checkzone button
         $("#grid-primary-domains").find(".command-bind-checkzone").off("click").on("click", function(ev) {
             if (!$(this).closest(".tabulator-row").hasClass("text-muted")) {
-                let zonename = $(this).closest(".tabulator-row").find("[tabulator-field='domainname']").text();
-                zone_test(zonename);
+                let row = $(this).closest(".tabulator-row");
+                let zonename = row.find("[tabulator-field='domainname']").text();
+                let zoneuuid = row.find("[tabulator-field='uuid']").text();
+                zone_test(zonename, zoneuuid);
             } else {
                 BootstrapDialog.show({
                     type: BootstrapDialog.TYPE_DANGER,
@@ -547,6 +638,22 @@ $(document).ready(function() {
                 updateServiceControlUI('bind');
                 $("#saveAct_acl_progress").removeClass("fa fa-spinner fa-pulse");
             });
+        });
+    });
+
+    $("#saveAct_view").click(function() {
+        $("#saveAct_view_progress").addClass("fa fa-spinner fa-pulse");
+        ajaxCall("/api/bind/service/reconfigure", {}, function(data, status) {
+            updateServiceControlUI('bind');
+            $("#saveAct_view_progress").removeClass("fa fa-spinner fa-pulse");
+        });
+    });
+
+    $("#saveAct_tsig").click(function() {
+        $("#saveAct_tsig_progress").addClass("fa fa-spinner fa-pulse");
+        ajaxCall("/api/bind/service/reconfigure", {}, function(data, status) {
+            updateServiceControlUI('bind');
+            $("#saveAct_tsig_progress").removeClass("fa fa-spinner fa-pulse");
         });
     });
 

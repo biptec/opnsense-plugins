@@ -1,0 +1,26 @@
+<form>
+    <field>
+        <id>key.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <help>Enable this TSIG key.</help>
+    </field>
+    <field>
+        <id>key.name</id>
+        <label>Name</label>
+        <type>text</type>
+        <help>Unique TSIG identity used by RFC2136 clients.</help>
+    </field>
+    <field>
+        <id>key.algorithm</id>
+        <label>Algorithm</label>
+        <type>dropdown</type>
+        <help>HMAC-SHA256 is recommended.</help>
+    </field>
+    <field>
+        <id>key.secret</id>
+        <label>Secret</label>
+        <type>password</type>
+        <help>Base64-encoded TSIG secret. Store the matching value securely on the DNS update client.</help>
+    </field>
+</form>

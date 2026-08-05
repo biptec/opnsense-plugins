@@ -9,6 +9,15 @@
                     <Default>1</Default>
                     <Required>Y</Required>
                 </enabled>
+                <view type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.View</source>
+                            <items>views.view</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                </view>
                 <type type="OptionField">
                     <Default>primary</Default>
                     <Required>Y</Required>
@@ -64,9 +73,31 @@
                     <Multiple>Y</Multiple>
                 </allowquery>
                 <allowrndcupdate type="BooleanField">
-                    <Default>1</Default>
+                    <Default>0</Default>
                     <Required>Y</Required>
                 </allowrndcupdate>
+                <updatekeys type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Tsig</source>
+                            <items>keys.key</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                    <Multiple>Y</Multiple>
+                </updatekeys>
+                <updatepolicy type="OptionField">
+                    <Default>zonesub_txt</Default>
+                    <Required>Y</Required>
+                    <OptionValues>
+                        <zonesub_txt>Zone subtree, TXT records only</zonesub_txt>
+                        <zonesub_any>Zone subtree, all record types</zonesub_any>
+                    </OptionValues>
+                </updatepolicy>
+                <dnssec type="BooleanField">
+                    <Default>0</Default>
+                    <Required>Y</Required>
+                </dnssec>
                 <serial type="TextField"/>
                 <ttl type="IntegerField">
                     <Default>86400</Default>

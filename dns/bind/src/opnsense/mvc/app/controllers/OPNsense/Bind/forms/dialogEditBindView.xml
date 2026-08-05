@@ -1,0 +1,76 @@
+<form>
+    <field>
+        <id>view.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <help>Enable this BIND view.</help>
+    </field>
+    <field>
+        <id>view.sequence</id>
+        <label>Sequence</label>
+        <type>text</type>
+        <help>Views are evaluated from the lowest sequence to the highest. A catch-all view must be last.</help>
+    </field>
+    <field>
+        <id>view.name</id>
+        <label>Name</label>
+        <type>text</type>
+        <help>Unique BIND view name.</help>
+    </field>
+    <field>
+        <id>view.matchany</id>
+        <label>Match any client</label>
+        <type>checkbox</type>
+        <help>Match every client. Use this only for the final catch-all view.</help>
+    </field>
+    <field>
+        <id>view.matchclients</id>
+        <label>Match client ACLs</label>
+        <type>select_multiple</type>
+        <help>Clients matching one of these ACLs are handled by this view. Ignored when Match any client is enabled.</help>
+    </field>
+    <field>
+        <id>view.recursion</id>
+        <label>Recursion</label>
+        <type>checkbox</type>
+        <help>Permit recursive resolution in this view. Do not enable it in a public authoritative view.</help>
+    </field>
+    <field>
+        <id>view.allowrecursion</id>
+        <label>Allow recursion ACLs</label>
+        <type>select_multiple</type>
+        <help>ACLs allowed to use recursion. If empty, the Match client ACLs are used.</help>
+    </field>
+    <field>
+        <id>view.allowqueryany</id>
+        <label>Allow queries from any client</label>
+        <type>checkbox</type>
+        <help>Allow all clients to query zones in this view. Normally enabled only for the public authoritative view.</help>
+    </field>
+    <field>
+        <id>view.allowquery</id>
+        <label>Allow query ACLs</label>
+        <type>select_multiple</type>
+        <help>ACLs allowed to query this view. If empty, the Match client ACLs are used.</help>
+    </field>
+    <field>
+        <id>view.allowtransfer</id>
+        <label>Allow transfer ACLs</label>
+        <type>select_multiple</type>
+        <help>Default ACLs allowed to transfer zones in this view. Zone-specific settings can override this.</help>
+    </field>
+    <field>
+        <id>view.forwarders</id>
+        <label>Forwarders</label>
+        <type>select_multiple</type>
+        <allownew>true</allownew>
+        <style>tokenize</style>
+        <help>Optional recursive forwarding servers for this view.</help>
+    </field>
+    <field>
+        <id>view.dnssecvalidation</id>
+        <label>DNSSEC Validation</label>
+        <type>dropdown</type>
+        <help>Validate DNSSEC for recursive queries in this view.</help>
+    </field>
+</form>

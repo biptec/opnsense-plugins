@@ -6,6 +6,12 @@
         <help>This will enable or disable this zone.</help>
     </field>
     <field>
+        <id>domain.view</id>
+        <label>View</label>
+        <type>dropdown</type>
+        <help>Assign this zone to a BIND view. Required when views are enabled.</help>
+    </field>
+    <field>
         <id>domain.domainname</id>
         <label>Zone Name</label>
         <type>text</type>
@@ -34,6 +40,24 @@
         <label>Allow RDNC key update</label>
         <type>checkbox</type>
         <help>Allow updates via the RDNC key named "rndc-key". The key is shown in the general tab.</help>
+    </field>
+    <field>
+        <id>domain.updatekeys</id>
+        <label>RFC2136 Update Keys</label>
+        <type>select_multiple</type>
+        <help>TSIG keys allowed to update this zone. TXT-only updates are recommended for ACME DNS-01.</help>
+    </field>
+    <field>
+        <id>domain.updatepolicy</id>
+        <label>RFC2136 Update Policy</label>
+        <type>dropdown</type>
+        <help>Restrict dynamic updates to TXT records unless other record types are explicitly required.</help>
+    </field>
+    <field>
+        <id>domain.dnssec</id>
+        <label>DNSSEC</label>
+        <type>checkbox</type>
+        <help>Enable BIND automatic DNSSEC signing with the default policy and inline signing.</help>
     </field>
     <field>
         <id>domain.ttl</id>
