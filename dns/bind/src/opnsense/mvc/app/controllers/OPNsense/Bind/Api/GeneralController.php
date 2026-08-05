@@ -33,6 +33,7 @@ namespace OPNsense\Bind\Api;
 use OPNsense\Base\ApiMutableModelControllerBase;
 use OPNsense\Core\Backend;
 use OPNsense\Bind\Domain;
+use OPNsense\Bind\View;
 
 class GeneralController extends ApiMutableModelControllerBase
 {
@@ -74,6 +75,36 @@ class GeneralController extends ApiMutableModelControllerBase
         }
         $backend = new Backend();
         return json_decode($backend->configdpRun("bind zone show", [$zone[1]]), true) ?? [];
+    }
+
+    public function dnssecStatusAction()
+    {
+        $zone = $this->getZoneRequest();
+        if ($zone === null) {
+            return ["error" => "request error"];
+        }
+        $model = new Domain();
+        $node = $model->getNodeByReference('domains.domain.' . $zone[1]);
+        if ($node === null || (string)$node->type !== 'primary' || (string)$node->dnssec !== '1') {
+            return ["error" => "DNSSEC is not enabled for this primary zone"];
+        }
+
+        $viewName = '__default__';
+        $viewUuid = (string)$node->view;
+        if ($viewUuid !== '') {
+            $viewModel = new View();
+            $viewNode = $viewModel->getNodeByReference('views.view.' . $viewUuid);
+            if ($viewNode === null || (string)$viewNode->enabled !== '1') {
+                return ["error" => "zone view is missing or disabled"];
+            }
+            $viewName = (string)$viewNode->name;
+        }
+
+        $backend = new Backend();
+        return json_decode(
+            $backend->configdpRun('bind dnssec status', [$zone[0], $viewName]),
+            true
+        ) ?? ["error" => "empty backend response"];
     }
 
 }
