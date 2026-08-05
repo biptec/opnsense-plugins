@@ -46,12 +46,14 @@ jobs:
               print(f"XML OK: {path}")
           PY
 
-      - name: Validate Python and shell
+      - name: Validate Python and portable shell
         run: |
           find dns/bind/src/opnsense -name '*.py' -print0 \
             | xargs -0 -n1 python3 -m py_compile
-          find dns/bind/src/opnsense -name '*.sh' -print0 \
-            | xargs -0 -n1 sh -n
+          # dnsbl.sh intentionally uses FreeBSD sh function names containing
+          # hyphens, which Ubuntu dash rejects even though OPNsense accepts them.
+          find dns/bind/src/opnsense -name '*.sh' ! -name 'dnsbl.sh' -print0 \
+            | xargs -0 -r -n1 sh -n
 
       - name: Run cleanup unit tests
         run: python3 -m unittest dns/bind/tests/test_service.py
