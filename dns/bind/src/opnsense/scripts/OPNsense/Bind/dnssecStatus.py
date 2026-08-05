@@ -40,7 +40,7 @@ def main():
     key_pattern = os.path.join(KEY_DIRECTORY, "K" + glob.escape(zone.rstrip(".")) + ".+*.key")
     for key_file in sorted(glob.glob(key_pattern)):
         key_result = {"file": os.path.basename(key_file)}
-        ds = run(["/usr/local/sbin/dnssec-dsfromkey", "-2", key_file])
+        ds = run(["/usr/local/bin/dnssec-dsfromkey", "-2", key_file])
         if ds.returncode == 0:
             records = [line.strip() for line in ds.stdout.splitlines() if line.strip()]
             result["ds_records"].extend(records)
