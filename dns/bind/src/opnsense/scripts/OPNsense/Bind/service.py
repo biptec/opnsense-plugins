@@ -7,7 +7,6 @@ per-zone directory. Cleanup is intentionally limited to those namespaces, so
 custom includes and unrelated files in namedb remain untouched.
 """
 
-import glob
 import os
 import re
 import shutil
@@ -81,10 +80,10 @@ def ensure_zone_key_directory(zone):
 
 
 def migrate_legacy_keys(dnssec_zones):
-    """Move keys written by the pre-directory development version.
+    """Move keys for currently configured zones from the legacy global path.
 
-    The global key root was introduced by this plugin and is not used for
-    custom includes. Current zones are migrated; stale legacy keys are removed.
+    Unknown root-level key files are deliberately left untouched. Only marked
+    per-zone directories are eligible for automatic removal.
     """
     if not os.path.isdir(KEY_ROOT):
         return
@@ -100,8 +99,8 @@ def migrate_legacy_keys(dnssec_zones):
                 os.replace(source, destination)
             else:
                 os.unlink(source)
-        else:
-            os.unlink(source)
+        # Leave keys for unknown zones untouched: they may belong to a custom
+        # include rather than to the plugin.
 
 
 def reconcile_key_directories(dnssec_zones):
