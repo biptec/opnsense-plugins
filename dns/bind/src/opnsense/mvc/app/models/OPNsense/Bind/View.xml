@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/bind/view</mount>
     <description>BIND view configuration</description>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <items>
         <views>
             <view type="ArrayField">
@@ -41,6 +41,16 @@
                     </Model>
                     <Multiple>Y</Multiple>
                 </matchclients>
+                <matchdestinations type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Acl</source>
+                            <items>acls.acl</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                    <Multiple>Y</Multiple>
+                </matchdestinations>
                 <recursion type="BooleanField">
                     <Default>0</Default>
                     <Required>Y</Required>

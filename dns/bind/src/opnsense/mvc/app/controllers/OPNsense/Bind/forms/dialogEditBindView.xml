@@ -30,6 +30,12 @@
         <help>Clients matching one of these ACLs are handled by this view. Ignored when Match any client is enabled.</help>
     </field>
     <field>
+        <id>view.matchdestinations</id>
+        <label>Match destination ACLs</label>
+        <type>select_multiple</type>
+        <help>Only DNS requests sent to an address in these ACLs are handled by this view. Use separate LAN and WAN destination ACLs for split DNS.</help>
+    </field>
+    <field>
         <id>view.recursion</id>
         <label>Recursion</label>
         <type>checkbox</type>

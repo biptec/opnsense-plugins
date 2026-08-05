@@ -51,7 +51,7 @@
         <id>domain.updatepolicy</id>
         <label>RFC2136 Update Policy</label>
         <type>dropdown</type>
-        <help>Restrict dynamic updates to TXT records unless other record types are explicitly required.</help>
+        <help>Exact-name TXT policy is recommended for ACME. The TSIG key name must equal the record owner, for example _acme-challenge.example.net.</help>
     </field>
     <field>
         <id>domain.dnssec</id>

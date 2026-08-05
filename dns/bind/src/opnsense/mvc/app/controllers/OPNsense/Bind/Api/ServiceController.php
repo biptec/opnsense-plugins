@@ -151,6 +151,21 @@ class ServiceController extends ApiMutableServiceControllerBase
                             gettext('Configuration exception')
                         );
                     }
+                    if ((string)$domain->updatepolicy === 'self_txt') {
+                        $keyName = strtolower(rtrim($enabledTsigKeys[$keyUuid], '.'));
+                        if ($keyName !== $domainName && !str_ends_with($keyName, '.' . $domainName)) {
+                            throw new UserException(
+                                sprintf(
+                                    gettext(
+                                        'Exact-name update policy for zone "%s" requires TSIG key "%s" to be inside that zone.'
+                                    ),
+                                    (string)$domain->domainname,
+                                    $enabledTsigKeys[$keyUuid]
+                                ),
+                                gettext('Configuration exception')
+                            );
+                        }
+                    }
                 }
             }
 
