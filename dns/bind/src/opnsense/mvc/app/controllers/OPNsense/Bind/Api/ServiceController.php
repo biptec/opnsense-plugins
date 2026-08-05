@@ -31,9 +31,12 @@
 namespace OPNsense\Bind\Api;
 
 use OPNsense\Base\ApiMutableServiceControllerBase;
+use OPNsense\Base\UserException;
 use OPNsense\Core\Backend;
 use OPNsense\Bind\General;
 use OPNsense\Bind\Dnsbl;
+use OPNsense\Bind\Domain;
+use OPNsense\Bind\View;
 
 /**
  * Class ServiceController
@@ -45,6 +48,118 @@ class ServiceController extends ApiMutableServiceControllerBase
     protected static $internalServiceTemplate = 'OPNsense/Bind';
     protected static $internalServiceEnabled = 'enabled';
     protected static $internalServiceName = 'bind';
+
+
+    private function validateViews()
+    {
+        $viewModel = new View();
+        $viewRoot = $viewModel->getNodeByReference('views.view');
+        $enabledViews = [];
+        $sequences = [];
+        $matchAnyViews = [];
+
+        if ($viewRoot !== null) {
+            foreach ($viewRoot->iterateItems() as $view) {
+                if ((string)$view->enabled !== '1') {
+                    continue;
+                }
+                $uuid = $view->getAttribute('uuid');
+                $sequence = (int)(string)$view->sequence;
+                $name = (string)$view->name;
+                if ((string)$view->matchany !== '1' && (string)$view->matchclients === '') {
+                    throw new UserException(
+                        sprintf(gettext('BIND view "%s" has no matching clients.'), $name),
+                        gettext('Configuration exception')
+                    );
+                }
+                if (isset($sequences[$sequence])) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('BIND views "%s" and "%s" use the same sequence.'),
+                            $sequences[$sequence],
+                            $name
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+                $sequences[$sequence] = $name;
+                $enabledViews[$uuid] = [
+                    'name' => $name,
+                    'sequence' => $sequence,
+                    'matchany' => (string)$view->matchany === '1'
+                ];
+                if ((string)$view->matchany === '1') {
+                    $matchAnyViews[] = $uuid;
+                }
+            }
+        }
+
+        if (empty($enabledViews)) {
+            return;
+        }
+
+        if (count($matchAnyViews) > 1) {
+            throw new UserException(
+                gettext('Only one enabled BIND view may match every client.'),
+                gettext('Configuration exception')
+            );
+        }
+        if (count($matchAnyViews) === 1) {
+            $matchAnyUuid = $matchAnyViews[0];
+            $highestSequence = max(array_column($enabledViews, 'sequence'));
+            if ($enabledViews[$matchAnyUuid]['sequence'] !== $highestSequence) {
+                throw new UserException(
+                    sprintf(
+                        gettext('The match-any BIND view "%s" must have the highest sequence.'),
+                        $enabledViews[$matchAnyUuid]['name']
+                    ),
+                    gettext('Configuration exception')
+                );
+            }
+        }
+
+        $domainModel = new Domain();
+        $domainRoot = $domainModel->getNodeByReference('domains.domain');
+        $zoneNames = [];
+        if ($domainRoot !== null) {
+            foreach ($domainRoot->iterateItems() as $domain) {
+                if ((string)$domain->enabled !== '1') {
+                    continue;
+                }
+                $viewUuid = (string)$domain->view;
+                $domainName = strtolower(rtrim((string)$domain->domainname, '.'));
+                if ($viewUuid === '' || !isset($enabledViews[$viewUuid])) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('Enabled zone "%s" is not assigned to an enabled BIND view.'),
+                            (string)$domain->domainname
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+                $key = $viewUuid . ':' . $domainName;
+                if (isset($zoneNames[$key])) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('Zone "%s" is defined more than once in BIND view "%s".'),
+                            (string)$domain->domainname,
+                            $enabledViews[$viewUuid]['name']
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+                $zoneNames[$key] = true;
+            }
+        }
+    }
+
+    public function reconfigureAction()
+    {
+        if ($this->request->isPost()) {
+            $this->validateViews();
+        }
+        return parent::reconfigureAction();
+    }
 
     public function dnsblAction()
     {

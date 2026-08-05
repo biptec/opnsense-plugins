@@ -53,7 +53,7 @@ class DomainController extends ApiMutableModelControllerBase
     {
         return $this->searchBase(
             'domains.domain',
-            [ 'enabled', 'type', 'domainname', 'ttl', 'refresh', 'retry', 'expire', 'negative' ],
+            [ 'enabled', 'view', 'type', 'domainname', 'ttl', 'refresh', 'retry', 'expire', 'negative' ],
             'domainname',
             function ($record) {
                 return $record->type->getNodeData()['primary']['selected'] === 1;
@@ -65,7 +65,7 @@ class DomainController extends ApiMutableModelControllerBase
     {
         return $this->searchBase(
             'domains.domain',
-            [ 'enabled', 'type', 'domainname', 'primaryip' ],
+            [ 'enabled', 'view', 'type', 'domainname', 'primaryip' ],
             'domainname',
             function ($record) {
                 return $record->type->getNodeData()['secondary']['selected'] === 1;
@@ -77,7 +77,7 @@ class DomainController extends ApiMutableModelControllerBase
     {
         return $this->searchBase(
             'domains.domain',
-            [ 'enabled', 'type', 'domainname', 'forwardserver' ],
+            [ 'enabled', 'view', 'type', 'domainname', 'forwardserver' ],
             'domainname',
             function ($record) {
                 return $record->type->getNodeData()['forward']['selected'] === 1;

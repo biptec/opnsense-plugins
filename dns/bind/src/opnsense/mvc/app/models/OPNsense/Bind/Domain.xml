@@ -9,6 +9,15 @@
                     <Default>1</Default>
                     <Required>Y</Required>
                 </enabled>
+                <view type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.View</source>
+                            <items>views.view</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                </view>
                 <type type="OptionField">
                     <Default>primary</Default>
                     <Required>Y</Required>

@@ -32,31 +32,48 @@ namespace OPNsense\Bind\Api;
 
 use OPNsense\Base\ApiMutableModelControllerBase;
 use OPNsense\Core\Backend;
+use OPNsense\Bind\Domain;
 
 class GeneralController extends ApiMutableModelControllerBase
 {
     protected static $internalModelClass = '\OPNsense\Bind\General';
     protected static $internalModelName = 'general';
 
+    private function getZoneRequest()
+    {
+        if (!$this->request->hasPost("zone") || !$this->request->hasPost("uuid")) {
+            return null;
+        }
+        $uuid = $this->request->getPost("uuid");
+        if (!preg_match('/^[0-9a-fA-F-]+$/', $uuid)) {
+            return null;
+        }
+        $model = new Domain();
+        $node = $model->getNodeByReference('domains.domain.' . $uuid);
+        if ($node === null || (string)$node->domainname !== $this->request->getPost("zone")) {
+            return null;
+        }
+        return [(string)$node->domainname, $uuid];
+    }
+
     public function zonetestAction($zonename = null)
     {
-        $response = "request error";
-        if ($this->request->hasPost("zone")) {
-            $zonename = $this->request->getPost("zone");
-            $backend = new Backend();
-            $response = trim($backend->configdpRun("bind zone check", [$zonename]));
+        $zone = $this->getZoneRequest();
+        if ($zone === null) {
+            return ["response" => "request error"];
         }
-        return array("response" => $response);
+        $backend = new Backend();
+        return ["response" => trim($backend->configdpRun("bind zone check", $zone))];
     }
 
     public function zoneshowAction($zonename = null)
     {
-        $response = "request error";
-        if ($this->request->hasPost("zone")) {
-            $zonename = $this->request->getPost("zone");
-            $backend = new Backend();
-            $response = json_decode($backend->configdpRun("bind zone show", [$zonename]), true);
+        $zone = $this->getZoneRequest();
+        if ($zone === null) {
+            return [];
         }
-        return $response;
+        $backend = new Backend();
+        return json_decode($backend->configdpRun("bind zone show", [$zone[1]]), true) ?? [];
     }
+
 }

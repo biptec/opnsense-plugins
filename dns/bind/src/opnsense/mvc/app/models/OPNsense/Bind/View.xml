@@ -1,0 +1,96 @@
+<model>
+    <mount>//OPNsense/bind/view</mount>
+    <description>BIND view configuration</description>
+    <version>1.0.0</version>
+    <items>
+        <views>
+            <view type="ArrayField">
+                <enabled type="BooleanField">
+                    <Default>1</Default>
+                    <Required>Y</Required>
+                </enabled>
+                <sequence type="IntegerField">
+                    <Default>100</Default>
+                    <Required>Y</Required>
+                    <MinimumValue>1</MinimumValue>
+                    <MaximumValue>9999</MaximumValue>
+                    <ValidationMessage>Choose a sequence between 1 and 9999. Views are evaluated from the lowest value to the highest.</ValidationMessage>
+                </sequence>
+                <name type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^[0-9a-zA-Z_\-]{1,32}$/u</Mask>
+                    <ValidationMessage>Use 1 to 32 characters: 0-9, a-z, A-Z, _ or -.</ValidationMessage>
+                    <Constraints>
+                        <check001>
+                            <ValidationMessage>A view with this name already exists.</ValidationMessage>
+                            <type>UniqueConstraint</type>
+                        </check001>
+                    </Constraints>
+                </name>
+                <matchany type="BooleanField">
+                    <Default>0</Default>
+                    <Required>Y</Required>
+                </matchany>
+                <matchclients type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Acl</source>
+                            <items>acls.acl</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                    <Multiple>Y</Multiple>
+                </matchclients>
+                <recursion type="BooleanField">
+                    <Default>0</Default>
+                    <Required>Y</Required>
+                </recursion>
+                <allowrecursion type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Acl</source>
+                            <items>acls.acl</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                    <Multiple>Y</Multiple>
+                </allowrecursion>
+                <allowqueryany type="BooleanField">
+                    <Default>0</Default>
+                    <Required>Y</Required>
+                </allowqueryany>
+                <allowquery type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Acl</source>
+                            <items>acls.acl</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                    <Multiple>Y</Multiple>
+                </allowquery>
+                <allowtransfer type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Acl</source>
+                            <items>acls.acl</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                    <Multiple>Y</Multiple>
+                </allowtransfer>
+                <forwarders type="NetworkField">
+                    <AsList>Y</AsList>
+                </forwarders>
+                <dnssecvalidation type="OptionField">
+                    <OptionValues>
+                        <no>No</no>
+                        <auto>Auto</auto>
+                    </OptionValues>
+                    <Default>auto</Default>
+                    <Required>Y</Required>
+                </dnssecvalidation>
+            </view>
+        </views>
+    </items>
+</model>

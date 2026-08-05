@@ -1,6 +1,6 @@
 bing.db:/usr/local/etc/namedb/primary/bing.db
 blacklist.db:/usr/local/etc/namedb/primary/blacklist.db
-domain.db:/usr/local/etc/namedb/primary/[OPNsense.bind.domain.domains.domain.%.domainname].db
+domain.db:/usr/local/etc/namedb/primary/[OPNsense.bind.domain.domains.domain.%.@uuid].db
 duckduckgo.db:/usr/local/etc/namedb/primary/duckduckgo.db
 google.db:/usr/local/etc/namedb/primary/google.db
 named:/etc/rc.conf.d/named
