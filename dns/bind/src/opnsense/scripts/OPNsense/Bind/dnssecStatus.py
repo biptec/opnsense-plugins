@@ -40,17 +40,40 @@ def main():
     key_pattern = os.path.join(KEY_DIRECTORY, "K" + glob.escape(zone.rstrip(".")) + ".+*.key")
     for key_file in sorted(glob.glob(key_pattern)):
         key_result = {"file": os.path.basename(key_file)}
-        ds = run(["/usr/local/bin/dnssec-dsfromkey", "-2", key_file])
-        if ds.returncode == 0:
-            records = [line.strip() for line in ds.stdout.splitlines() if line.strip()]
-            result["ds_records"].extend(records)
-            if records:
-                fields = records[0].split()
-                if len(fields) >= 7:
-                    key_result["key_tag"] = fields[-4]
-                    key_result["algorithm"] = fields[-3]
-        else:
-            key_result["error"] = ds.stderr.strip() or ds.stdout.strip()
+        flags = None
+        try:
+            with open(key_file, "r", encoding="utf-8") as handle:
+                key_text = " ".join(
+                    line.strip() for line in handle if line.strip() and not line.lstrip().startswith(";")
+                )
+            match = re.search(r"\sDNSKEY\s+(\d+)\s+(\d+)\s+(\d+)\s", key_text)
+            if match:
+                flags = int(match.group(1))
+                key_result["flags"] = str(flags)
+                key_result["algorithm"] = match.group(3)
+                if flags & 128:
+                    key_result["role"] = "revoked"
+                elif flags & 1:
+                    key_result["role"] = "ksk"
+                else:
+                    key_result["role"] = "zsk"
+        except OSError as error:
+            key_result["error"] = str(error)
+
+        # Only SEP/KSK or CSK records belong at the parent. Never publish a
+        # revoked key or a zone-signing-only key as a DS record.
+        if flags is not None and flags & 1 and not flags & 128:
+            ds = run(["/usr/local/bin/dnssec-dsfromkey", "-2", key_file])
+            if ds.returncode == 0:
+                records = [line.strip() for line in ds.stdout.splitlines() if line.strip()]
+                result["ds_records"].extend(records)
+                if records:
+                    fields = records[0].split()
+                    if len(fields) >= 7:
+                        key_result["key_tag"] = fields[-4]
+                        key_result["algorithm"] = fields[-3]
+            else:
+                key_result["error"] = ds.stderr.strip() or ds.stdout.strip()
         result["keys"].append(key_result)
 
     command = ["/usr/local/sbin/rndc", "-c", RNDC_CONFIG, "zonestatus", zone]

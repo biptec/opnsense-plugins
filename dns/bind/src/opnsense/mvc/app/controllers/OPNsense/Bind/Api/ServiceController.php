@@ -51,7 +51,7 @@ class ServiceController extends ApiMutableServiceControllerBase
     protected static $internalServiceName = 'bind';
 
 
-    private function validateViews()
+    private function validateConfiguration()
     {
         $viewModel = new View();
         $viewRoot = $viewModel->getNodeByReference('views.view');
@@ -95,10 +95,6 @@ class ServiceController extends ApiMutableServiceControllerBase
             }
         }
 
-        if (empty($enabledViews)) {
-            return;
-        }
-
         if (count($matchAnyViews) > 1) {
             throw new UserException(
                 gettext('Only one enabled BIND view may match every client.'),
@@ -133,13 +129,32 @@ class ServiceController extends ApiMutableServiceControllerBase
         $domainModel = new Domain();
         $domainRoot = $domainModel->getNodeByReference('domains.domain');
         $zoneNames = [];
-        if ($domainRoot !== null) {
-            foreach ($domainRoot->iterateItems() as $domain) {
-                if ((string)$domain->enabled !== '1') {
-                    continue;
+        if ($domainRoot === null) {
+            return;
+        }
+
+        foreach ($domainRoot->iterateItems() as $domain) {
+            if ((string)$domain->enabled !== '1') {
+                continue;
+            }
+            $viewUuid = (string)$domain->view;
+            $domainName = strtolower(rtrim((string)$domain->domainname, '.'));
+
+            if ((string)$domain->type === 'primary' && (string)$domain->updatekeys !== '') {
+                foreach (explode(',', (string)$domain->updatekeys) as $keyUuid) {
+                    if (!isset($enabledTsigKeys[$keyUuid])) {
+                        throw new UserException(
+                            sprintf(
+                                gettext('Zone "%s" references a missing or disabled TSIG key.'),
+                                (string)$domain->domainname
+                            ),
+                            gettext('Configuration exception')
+                        );
+                    }
                 }
-                $viewUuid = (string)$domain->view;
-                $domainName = strtolower(rtrim((string)$domain->domainname, '.'));
+            }
+
+            if (!empty($enabledViews)) {
                 if ($viewUuid === '' || !isset($enabledViews[$viewUuid])) {
                     throw new UserException(
                         sprintf(
@@ -149,40 +164,31 @@ class ServiceController extends ApiMutableServiceControllerBase
                         gettext('Configuration exception')
                     );
                 }
-                if ((string)$domain->type === 'primary' && (string)$domain->updatekeys !== '') {
-                    foreach (explode(',', (string)$domain->updatekeys) as $keyUuid) {
-                        if (!isset($enabledTsigKeys[$keyUuid])) {
-                            throw new UserException(
-                                sprintf(
-                                    gettext('Zone "%s" references a missing or disabled TSIG key.'),
-                                    (string)$domain->domainname
-                                ),
-                                gettext('Configuration exception')
-                            );
-                        }
-                    }
-                }
-
-                $key = $viewUuid . ':' . $domainName;
-                if (isset($zoneNames[$key])) {
-                    throw new UserException(
-                        sprintf(
-                            gettext('Zone "%s" is defined more than once in BIND view "%s".'),
-                            (string)$domain->domainname,
-                            $enabledViews[$viewUuid]['name']
-                        ),
-                        gettext('Configuration exception')
-                    );
-                }
-                $zoneNames[$key] = true;
+                $zoneKey = $viewUuid . ':' . $domainName;
+                $duplicateMessage = sprintf(
+                    gettext('Zone "%s" is defined more than once in BIND view "%s".'),
+                    (string)$domain->domainname,
+                    $enabledViews[$viewUuid]['name']
+                );
+            } else {
+                $zoneKey = $domainName;
+                $duplicateMessage = sprintf(
+                    gettext('Zone "%s" is defined more than once while BIND views are disabled.'),
+                    (string)$domain->domainname
+                );
             }
+
+            if (isset($zoneNames[$zoneKey])) {
+                throw new UserException($duplicateMessage, gettext('Configuration exception'));
+            }
+            $zoneNames[$zoneKey] = true;
         }
     }
 
     public function reconfigureAction()
     {
         if ($this->request->isPost()) {
-            $this->validateViews();
+            $this->validateConfiguration();
         }
         return parent::reconfigureAction();
     }
