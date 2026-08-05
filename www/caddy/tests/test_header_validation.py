@@ -23,9 +23,15 @@ class HeaderValidationTest(unittest.TestCase):
         self.assertIsNotNone(field, f"missing {name}")
         return field
 
-    def test_plugin_patch_version(self) -> None:
+    def test_changelog_contains_current_plugin_version(self) -> None:
         makefile = (CADDY_ROOT / "Makefile").read_text()
-        self.assertIn("PLUGIN_VERSION=\t\t2.1.1", makefile)
+        version_line = next(
+            line for line in makefile.splitlines() if line.startswith("PLUGIN_VERSION=")
+        )
+        version = version_line.split("=", 1)[1].strip()
+        changelog = (CADDY_ROOT / "pkg-descr").read_text()
+        self.assertIn(f"\n{version}\n", changelog)
+
     def test_header_type_is_single_safe_token(self) -> None:
         field = self.field("HeaderType")
         self.assertEqual(field.findtext("AllowSpaces"), "N")
