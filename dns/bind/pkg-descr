@@ -7,6 +7,15 @@ necessary for asking and answering name service questions.
 Plugin Changelog
 ================
 
+1.35
+
+* Add generic BIND views for authoritative and recursive split DNS
+* Add per-view query, recursion, transfer and forwarding policy
+* Add TSIG keys and restricted RFC2136 dynamic updates
+* Add automatic DNSSEC signing and registrar-ready DS status API
+* Support identical zone names in separate views with isolated zone files
+* Validate view ordering, zone ownership and TSIG dependencies before reload
+
 1.34
 
 * Add custom configuration include directory /usr/local/etc/namedb/named.conf.d (contributed by Nicholas Card)
