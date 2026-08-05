@@ -37,9 +37,14 @@ def main():
         print(json.dumps(result))
         return
 
-    key_pattern = os.path.join(KEY_DIRECTORY, "K" + glob.escape(zone.rstrip(".")) + ".+*.key")
-    for key_file in sorted(glob.glob(key_pattern)):
-        key_result = {"file": os.path.basename(key_file)}
+    normalized_zone = zone.rstrip(".").lower()
+    key_patterns = [
+        os.path.join(KEY_DIRECTORY, normalized_zone, "K" + glob.escape(normalized_zone) + ".+*.key"),
+        os.path.join(KEY_DIRECTORY, "K" + glob.escape(normalized_zone) + ".+*.key"),
+    ]
+    key_files = sorted({key_file for pattern in key_patterns for key_file in glob.glob(pattern)})
+    for key_file in key_files:
+        key_result = {"file": os.path.relpath(key_file, KEY_DIRECTORY)}
         flags = None
         try:
             with open(key_file, "r", encoding="utf-8") as handle:
