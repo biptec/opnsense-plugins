@@ -77,19 +77,30 @@ class WebguiController extends ApiControllerBase
         $currentProtocol = (string)$webgui->protocol;
         $currentCertificate = (string)($webgui->{'ssl-certref'} ?? '');
 
-        try {
-            $protocol = array_key_exists('protocol', $data) ? (string)$data['protocol'] : $currentProtocol;
-            if (!in_array($protocol, ['http', 'https'], true)) {
-                throw new InvalidArgumentException('protocol must be http or https.');
+        $protocol = $currentProtocol;
+        if (array_key_exists('protocol', $data)) {
+            if (!is_string($data['protocol']) || !in_array($data['protocol'], ['http', 'https'], true)) {
+                $response['validations']['protocol'] = 'protocol must be http or https.';
+            } else {
+                $protocol = $data['protocol'];
             }
-            $certificate = array_key_exists('certificate_ref', $data)
-                ? (string)$data['certificate_ref']
-                : $currentCertificate;
-            if ($protocol === 'https' && !ConfigAccess::certificateExists($certificate)) {
-                throw new InvalidArgumentException('certificate_ref must reference an existing certificate for HTTPS.');
+        }
+
+        $certificate = $currentCertificate;
+        if (array_key_exists('certificate_ref', $data)) {
+            if (!is_string($data['certificate_ref'])) {
+                $response['validations']['certificate_ref'] = 'certificate_ref must be a string.';
+            } else {
+                $certificate = $data['certificate_ref'];
             }
-        } catch (InvalidArgumentException $error) {
-            $response['validations']['protocol'] = $error->getMessage();
+        }
+        if (
+            $protocol === 'https' &&
+            !isset($response['validations']['certificate_ref']) &&
+            !ConfigAccess::certificateSupportsServerAuth($certificate)
+        ) {
+            $response['validations']['certificate_ref'] =
+                'certificate_ref must reference an existing TLS server certificate for HTTPS.';
         }
 
         $validated = [];
@@ -124,7 +135,7 @@ class WebguiController extends ApiControllerBase
                         if (!is_string($value)) {
                             throw new InvalidArgumentException('certificate_ref must be a string.');
                         }
-                        $validated[$field] = $value;
+                        $validated[$field] = $certificate;
                         break;
                     case 'session_timeout':
                         $validated[$field] = $value === null

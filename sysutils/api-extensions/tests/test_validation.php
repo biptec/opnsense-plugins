@@ -84,4 +84,32 @@ assertSameValue(false, ConfigAccess::commandSucceeded('failed'), 'unexpected com
 assertSameValue(true, ConfigAccess::commandSucceeded('task-uuid', null), 'non-empty async task accepted');
 assertSameValue(false, ConfigAccess::commandSucceeded("  ", null), 'blank async task rejected');
 
+
+assertSameValue(
+    true,
+    ConfigAccess::parsedCertificateSupportsServerAuth([
+        'extensions' => [
+            'extendedKeyUsage' => 'TLS Web Client Authentication, TLS Web Server Authentication',
+        ],
+    ]),
+    'TLS server certificate purpose accepted'
+);
+assertSameValue(
+    false,
+    ConfigAccess::parsedCertificateSupportsServerAuth([
+        'extensions' => ['extendedKeyUsage' => 'TLS Web Client Authentication'],
+    ]),
+    'client-only certificate rejected'
+);
+assertSameValue(
+    false,
+    ConfigAccess::parsedCertificateSupportsServerAuth([]),
+    'certificate without extended key usage rejected'
+);
+assertSameValue(
+    false,
+    ConfigAccess::encodedCertificateSupportsServerAuth('not-base64!'),
+    'invalid encoded certificate rejected'
+);
+
 fwrite(STDOUT, "validation tests passed\n");

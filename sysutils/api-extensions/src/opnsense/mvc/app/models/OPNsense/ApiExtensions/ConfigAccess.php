@@ -91,7 +91,7 @@ class ConfigAccess
         return $expected === null || strcasecmp($result, $expected) === 0;
     }
 
-    public static function certificateExists(string $reference): bool
+    public static function certificateSupportsServerAuth(string $reference): bool
     {
         if ($reference === '') {
             return false;
@@ -102,9 +102,26 @@ class ConfigAccess
         }
         foreach ($config->cert as $certificate) {
             if (isset($certificate->refid) && (string)$certificate->refid === $reference) {
-                return true;
+                return self::encodedCertificateSupportsServerAuth((string)($certificate->crt ?? ''));
             }
         }
         return false;
+    }
+
+    public static function encodedCertificateSupportsServerAuth(string $encoded): bool
+    {
+        $certificate = base64_decode($encoded, true);
+        if ($certificate === false || $certificate === '') {
+            return false;
+        }
+        $details = @openssl_x509_parse($certificate);
+        return is_array($details) && self::parsedCertificateSupportsServerAuth($details);
+    }
+
+    public static function parsedCertificateSupportsServerAuth(array $details): bool
+    {
+        $extendedKeyUsage = (string)($details['extensions']['extendedKeyUsage'] ?? '');
+        $purposes = array_map('trim', explode(',', $extendedKeyUsage));
+        return in_array('TLS Web Server Authentication', $purposes, true);
     }
 }
