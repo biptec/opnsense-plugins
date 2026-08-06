@@ -78,6 +78,8 @@ class PrimaryTransferTemplateTest(unittest.TestCase):
 
         self.assertIn("<primarytransferkey type=\"ModelRelationField\">", model)
         self.assertIn("<alsonotify type=\"NetworkField\">", model)
+        self.assertIn("<NetMaskAllowed>N</NetMaskAllowed>", model)
+        self.assertIn("<WildcardEnabled>N</WildcardEnabled>", model)
         self.assertIn("<id>domain.primarytransferkey</id>", form)
         self.assertIn("<id>domain.alsonotify</id>", form)
 
