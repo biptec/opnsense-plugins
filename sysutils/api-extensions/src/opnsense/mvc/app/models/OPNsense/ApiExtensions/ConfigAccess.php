@@ -79,6 +79,18 @@ class ConfigAccess
         }
     }
 
+    public static function commandSucceeded($result, ?string $expected = 'OK'): bool
+    {
+        if (!is_string($result)) {
+            return false;
+        }
+        $result = trim($result);
+        if ($result === '') {
+            return false;
+        }
+        return $expected === null || strcasecmp($result, $expected) === 0;
+    }
+
     public static function certificateExists(string $reference): bool
     {
         if ($reference === '') {

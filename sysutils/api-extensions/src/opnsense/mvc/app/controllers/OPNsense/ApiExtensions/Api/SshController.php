@@ -166,6 +166,9 @@ class SshController extends ApiControllerBase
             return ['status' => 'failed'];
         }
         $result = trim((new Backend())->configdRun('openssh restart'));
-        return ['status' => 'ok', 'result' => $result];
+        return [
+            'status' => ConfigAccess::commandSucceeded($result) ? 'ok' : 'failed',
+            'result' => $result,
+        ];
     }
 }

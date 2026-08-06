@@ -27,9 +27,10 @@
  */
 
 require_once __DIR__ . '/../src/opnsense/mvc/app/models/OPNsense/ApiExtensions/Validation.php';
+require_once __DIR__ . '/../src/opnsense/mvc/app/models/OPNsense/ApiExtensions/ConfigAccess.php';
 
-use InvalidArgumentException;
 use OPNsense\ApiExtensions\Validation;
+use OPNsense\ApiExtensions\ConfigAccess;
 
 function assertSameValue($expected, $actual, string $message): void
 {
@@ -43,7 +44,7 @@ function assertInvalid(callable $callable, string $message): void
 {
     try {
         $callable();
-    } catch (InvalidArgumentException $error) {
+    } catch (\InvalidArgumentException $error) {
         return;
     }
     fwrite(STDERR, $message . ": expected InvalidArgumentException\n");
@@ -73,5 +74,14 @@ assertSameValue(
     Validation::hostnames(['router.example.net', 'router.internal', 'router.example.net'], 'hostnames'),
     'hostname list normalization'
 );
+
+assertSameValue(true, ConfigAccess::commandSucceeded("OK\n"), 'command OK accepted');
+assertSameValue(true, ConfigAccess::commandSucceeded('ok'), 'command status is case insensitive');
+assertSameValue(false, ConfigAccess::commandSucceeded(''), 'empty command result rejected');
+assertSameValue(false, ConfigAccess::commandSucceeded(null), 'null command result rejected');
+assertSameValue(false, ConfigAccess::commandSucceeded(['OK']), 'non-string command result rejected');
+assertSameValue(false, ConfigAccess::commandSucceeded('failed'), 'unexpected command result rejected');
+assertSameValue(true, ConfigAccess::commandSucceeded('task-uuid', null), 'non-empty async task accepted');
+assertSameValue(false, ConfigAccess::commandSucceeded("  ", null), 'blank async task rejected');
 
 fwrite(STDOUT, "validation tests passed\n");
