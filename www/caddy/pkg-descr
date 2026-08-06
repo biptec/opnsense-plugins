@@ -6,6 +6,11 @@ DOC: https://docs.opnsense.org/manual/how-tos/caddy.html
 Plugin Changelog
 ================
 
+2.2.0
+
+* Add: Explicit HTTP/HTTPS frontend bind addresses to prevent wildcard listeners.
+* Fix: Ignore legacy boolean values in HTTP-01 challenge passthrough targets.
+
 2.1.1
 
 * Security: Reject unsafe Caddy header names and control characters in header values and replacements.

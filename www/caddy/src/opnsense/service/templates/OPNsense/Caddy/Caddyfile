@@ -63,6 +63,9 @@
     {% if httpsPort %}
         https_port {{ httpsPort }}
     {% endif %}
+    {% if generalSettings.ListenAddresses %}
+        default_bind {{ generalSettings.ListenAddresses.split(',') | join(' ') }}
+    {% endif %}
 
     {#
     #   Section: Global Trusted Proxy and Credential Logging
@@ -235,6 +238,16 @@
 # Reverse Proxy Configuration
 
 {#
+# Ensure the Automatic HTTPS redirect server exists during Caddyfile adaptation.
+# Without an explicit HTTP server, Caddy creates the redirect listener later and
+# it does not inherit default_bind. Layer4 already creates this listener itself.
+#}
+{% if generalSettings.ListenAddresses and generalSettings.EnableLayer4|default("0") != "1" %}
+http:// {
+}
+{% endif %}
+
+{#
 #   When Layer4 is active, set default ports.
 #   Caddy does not set them up automatically under certain conditions.
 #   For example when AutoHTTPS would be off, or no domains have been configured.
@@ -276,14 +289,16 @@ http://{{ domain }} {
 {% endmacro %}
 
 {% for reverse in helpers.toList('Pischem.caddy.reverseproxy.reverse') %}
-    {% if reverse.enabled|default("0") == "1" and reverse.AcmePassthrough %}
-        {{ http01_challenge_redirection(reverse.FromDomain|default(""), reverse.AcmePassthrough) }}
+    {% set acmePassthrough = reverse.AcmePassthrough|default("") %}
+    {% if reverse.enabled|default("0") == "1" and acmePassthrough not in ["", "0", "1"] %}
+        {{ http01_challenge_redirection(reverse.FromDomain|default(""), acmePassthrough) }}
     {% endif %}
 {% endfor %}
 
 {% for subdomain in helpers.toList('Pischem.caddy.reverseproxy.subdomain') %}
-    {% if subdomain.enabled|default("0") == "1" and subdomain.AcmePassthrough %}
-        {{ http01_challenge_redirection(subdomain.FromDomain|default(""), subdomain.AcmePassthrough) }}
+    {% set acmePassthrough = subdomain.AcmePassthrough|default("") %}
+    {% if subdomain.enabled|default("0") == "1" and acmePassthrough not in ["", "0", "1"] %}
+        {{ http01_challenge_redirection(subdomain.FromDomain|default(""), acmePassthrough) }}
     {% endif %}
 {% endfor %}
 
