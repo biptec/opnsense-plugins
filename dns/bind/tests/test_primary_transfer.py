@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
@@ -73,11 +74,22 @@ def render_primary_zone(*, transfer_key="transfer-key-uuid", also_notify="192.0.
 
 class PrimaryTransferTemplateTest(unittest.TestCase):
     def test_model_and_form_expose_primary_transfer_fields(self):
-        model = MODEL_PATH.read_text()
+        model = ET.parse(MODEL_PATH).getroot()
         form = FORM_PATH.read_text()
+        domain = model.find("./items/domains/domain")
+        self.assertIsNotNone(domain)
 
-        self.assertIn("<primarytransferkey type=\"ModelRelationField\">", model)
-        self.assertIn("<alsonotify type=\"NetworkField\">", model)
+        transfer_key = domain.find("primarytransferkey")
+        self.assertIsNotNone(transfer_key)
+        self.assertEqual(transfer_key.attrib.get("type"), "ModelRelationField")
+
+        also_notify = domain.find("alsonotify")
+        self.assertIsNotNone(also_notify)
+        self.assertEqual(also_notify.attrib.get("type"), "NetworkField")
+        self.assertEqual(also_notify.findtext("NetMaskAllowed"), "N")
+        self.assertEqual(also_notify.findtext("WildcardEnabled"), "N")
+        self.assertEqual(also_notify.findtext("AsList"), "Y")
+
         self.assertIn("<id>domain.primarytransferkey</id>", form)
         self.assertIn("<id>domain.alsonotify</id>", form)
 
