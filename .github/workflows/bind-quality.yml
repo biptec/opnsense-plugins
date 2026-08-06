@@ -28,7 +28,10 @@ jobs:
       - name: Install PHP CLI
         run: |
           sudo apt-get update
-          sudo apt-get install -y php-cli
+          sudo apt-get install -y bind9-utils php-cli
+
+      - name: Install Python test dependencies
+        run: python3 -m pip install --requirement dns/bind/tests/requirements.txt
 
       - name: Validate PHP
         run: |
@@ -55,8 +58,8 @@ jobs:
           find dns/bind/src/opnsense -name '*.sh' ! -name 'dnsbl.sh' -print0 \
             | xargs -0 -r -n1 sh -n
 
-      - name: Run cleanup unit tests
-        run: python3 -m unittest dns/bind/tests/test_service.py
+      - name: Run BIND unit tests
+        run: python3 -m unittest discover -s dns/bind/tests -p 'test_*.py'
 
       - name: Check whitespace
         run: git diff --check
