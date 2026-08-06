@@ -30,6 +30,20 @@
         <help>Allow transfers via the RDNC key named "rndc-key". The key is shown in the general tab.</help>
     </field>
     <field>
+        <id>domain.primarytransferkey</id>
+        <label>Transfer TSIG Key</label>
+        <type>dropdown</type>
+        <help>Allow authenticated zone transfers with this existing TSIG key. The same key authenticates also-notify targets.</help>
+    </field>
+    <field>
+        <id>domain.alsonotify</id>
+        <label>Also Notify</label>
+        <style>tokenize</style>
+        <type>select_multiple</type>
+        <allownew>true</allownew>
+        <help>Secondary server IP addresses that receive NOTIFY messages. Select a transfer TSIG key to authenticate them.</help>
+    </field>
+    <field>
         <id>domain.allowquery</id>
         <label>Allow Query</label>
         <type>select_multiple</type>

@@ -140,6 +140,19 @@ class ServiceController extends ApiMutableServiceControllerBase
             $viewUuid = (string)$domain->view;
             $domainName = strtolower(rtrim((string)$domain->domainname, '.'));
 
+            if ((string)$domain->type === 'primary' && (string)$domain->primarytransferkey !== '') {
+                $transferKeyUuid = (string)$domain->primarytransferkey;
+                if (!isset($enabledTsigKeys[$transferKeyUuid])) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('Zone "%s" references a missing or disabled transfer TSIG key.'),
+                            (string)$domain->domainname
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+            }
+
             if ((string)$domain->type === 'primary' && (string)$domain->updatekeys !== '') {
                 foreach (explode(',', (string)$domain->updatekeys) as $keyUuid) {
                     if (!isset($enabledTsigKeys[$keyUuid])) {
