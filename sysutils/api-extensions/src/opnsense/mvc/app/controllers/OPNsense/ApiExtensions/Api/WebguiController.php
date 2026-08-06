@@ -195,6 +195,9 @@ class WebguiController extends ApiControllerBase
             return ['status' => 'failed'];
         }
         $message = trim((new Backend())->configdRun('webgui restart 2', true));
-        return ['status' => 'ok', 'msg_uuid' => $message];
+        return [
+            'status' => ConfigAccess::commandSucceeded($message, null) ? 'ok' : 'failed',
+            'msg_uuid' => $message,
+        ];
     }
 }
