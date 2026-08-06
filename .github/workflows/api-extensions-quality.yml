@@ -1,0 +1,49 @@
+name: os-api-extensions quality
+
+on:
+  pull_request:
+    paths:
+      - "sysutils/api-extensions/**"
+      - ".github/workflows/api-extensions-quality.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "sysutils/api-extensions/**"
+      - ".github/workflows/api-extensions-quality.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PHP CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli
+
+      - name: Validate PHP
+        run: |
+          find sysutils/api-extensions -name '*.php' -print0 \
+            | xargs -0 -r -n1 php -l
+
+      - name: Validate XML
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          for path in sorted(Path("sysutils/api-extensions").rglob("*.xml")):
+              ET.parse(path)
+              print(f"XML OK: {path}")
+          PY
+
+      - name: Run validation tests
+        run: php sysutils/api-extensions/tests/test_validation.php
+
+      - name: Check whitespace
+        run: git diff --check

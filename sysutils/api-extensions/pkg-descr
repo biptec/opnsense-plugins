@@ -1,0 +1,6 @@
+Adds authenticated API endpoints for OPNsense settings that are otherwise
+only available through legacy web pages. The plugin covers Web GUI and SSH
+listener bindings and the built-in NTP service so configuration-management
+tools can manage them without editing config.xml or using SSH.
+
+WWW: https://github.com/biptec/opnsense-plugins
