@@ -61,6 +61,13 @@
             <help>If the default HTTPS port is changed to e.g. 8443, then a port forward from port 443 to 8443 is necessary to issue automatic certificates with the TLS-ALPN-01 challenge and serve clients the reverse proxied resources.</help>
         </field>
         <field>
+            <id>caddy.general.ListenAddresses</id>
+            <label>Listen Addresses</label>
+            <type>text</type>
+            <hint>192.0.2.10,10.0.0.2</hint>
+            <help>Comma-separated literal IPv4 or IPv6 addresses for all HTTP and HTTPS frontend listeners. Leave empty only for legacy wildcard listening on every interface.</help>
+        </field>
+        <field>
             <type>header</type>
             <label>Server Settings</label>
         </field>

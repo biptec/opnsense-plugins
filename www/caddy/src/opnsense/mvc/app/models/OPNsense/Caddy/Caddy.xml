@@ -1,7 +1,7 @@
 <model>
     <mount>//Pischem/caddy</mount>
     <description>Caddy Reverse Proxy</description>
-    <version>1.3.8</version>
+    <version>1.3.9</version>
     <items>
         <general>
             <enabled type="BooleanField">
@@ -11,6 +11,13 @@
             <EnableLayer4 type="BooleanField"/>
             <HttpPort type="PortField"/>
             <HttpsPort type="PortField"/>
+            <ListenAddresses type="NetworkField">
+                <AsList>Y</AsList>
+                <FieldSeparator>,</FieldSeparator>
+                <NetMaskAllowed>N</NetMaskAllowed>
+                <WildcardEnabled>N</WildcardEnabled>
+                <ValidationMessage>Please provide one or more literal IPv4 or IPv6 addresses without a subnet mask.</ValidationMessage>
+            </ListenAddresses>
             <TlsEmail type="EmailField"/>
             <TlsAutoHttps type="OptionField">
                 <BlankDesc>On (default)</BlankDesc>
