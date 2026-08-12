@@ -1,7 +1,7 @@
 <?php
 
 /*
-    Copyright (C) 2019 Michael Muenz <m.muenz@gmail.com>
+    Copyright (C) 2026 Ted Welch <ted.welch@biptec.com>
     All rights reserved.
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions are met:
@@ -24,44 +24,20 @@
 
 namespace OPNsense\Bind;
 
-use OPNsense\Base\BaseModel;
-
-class Domain extends BaseModel
+final class ZoneSerial
 {
     /**
-     * {@inheritdoc}
+     * Return a serial that is always newer than the current one while retaining
+     * the existing yymmddHHMM clock-based scheme whenever the clock is ahead.
+     *
+     * @param mixed $current current zone serial
+     * @param mixed $clockSerial optional clock serial for deterministic tests
+     * @return string
      */
-    public function serializeToConfig($validateFullModel = false, $disable_validation = false)
+    public static function next($current, $clockSerial = null)
     {
-        $serialsToSet = array();
-        // collected changed records
-        foreach ($this->getFlatNodes() as $key => $node) {
-            if ($node->isFieldChanged() && (string)$node !== "") {
-                $domain = $node->getParentNode();
-                if (empty($serialsToSet[$domain->getAttribute('uuid')])) {
-                    $serialsToSet[$domain->getAttribute('uuid')] = $domain;
-                }
-            }
-        }
-        // new serials on changed records
-        foreach ($serialsToSet as $domain) {
-            $domain->serial = ZoneSerial::next($domain->serial);
-        }
-        return parent::serializeToConfig($validateFullModel, $disable_validation);
-    }
-
-    /**
-     * @param $uuid string domain uuid to update
-     * @return Domain
-     */
-    public function updateSerial($uuid)
-    {
-        foreach ($this->domains->domain->iterateItems() as $domain) {
-            if ($domain->getAttribute('uuid') == $uuid) {
-                $domain->serial = ZoneSerial::next($domain->serial);
-                return $this;
-            }
-        }
-        return $this;
+        $currentValue = (int)(string)$current;
+        $clockValue = (int)(string)($clockSerial === null ? date("ymdHi") : $clockSerial);
+        return (string)max($currentValue + 1, $clockValue);
     }
 }
