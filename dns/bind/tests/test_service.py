@@ -4,6 +4,7 @@ import importlib.util
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SCRIPT = Path(__file__).parents[1] / "src/opnsense/scripts/OPNsense/Bind/service.py"
@@ -101,6 +102,39 @@ class CleanupTests(unittest.TestCase):
         self.config.write_text(tree, encoding="utf-8")
         bind_service.cleanup()
         self.assertFalse(shared.exists())
+
+
+class ServiceActionTests(unittest.TestCase):
+    def run_action(self, action):
+        calls = []
+
+        def fake_run_named(named_action):
+            calls.append(("named", named_action))
+            return 0
+
+        def fake_cleanup():
+            calls.append(("cleanup", None))
+
+        with (
+            mock.patch.object(bind_service, "run_named", side_effect=fake_run_named),
+            mock.patch.object(bind_service, "cleanup", side_effect=fake_cleanup),
+            mock.patch.object(bind_service.sys, "argv", ["service.py", action]),
+        ):
+            result = bind_service.main()
+        return result, calls
+
+    def test_reload_uses_named_reload_without_restart(self):
+        result, calls = self.run_action("reload")
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [("cleanup", None), ("named", "reload")])
+
+    def test_restart_remains_stop_cleanup_start(self):
+        result, calls = self.run_action("restart")
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            calls,
+            [("named", "stop"), ("cleanup", None), ("named", "start")],
+        )
 
 
 if __name__ == "__main__":
