@@ -9,23 +9,43 @@ VIEW = ROOT / 'src/opnsense/mvc/app/views/OPNsense/Bind/general.volt'
 
 
 class ReloadRoutingTest(unittest.TestCase):
-    def test_reload_action_selects_soft_reconfigure(self):
+    def test_backend_actions_are_verified_and_retried(self):
         source = CONTROLLER.read_text()
-        self.assertIn('private $forceRestart = true;', source)
+        self.assertIn('private const RELOAD_ATTEMPTS = 5;', source)
+        self.assertIn('private const RELOAD_DELAY_US = 500000;', source)
+        self.assertNotIn('private $forceRestart', source)
         self.assertIsNotNone(
             re.search(
-                r'protected function reconfigureForceRestart\(\).*?return \$this->forceRestart;',
+                r'private function runServiceAction\(.*?return \$response === \'OK\';',
                 source,
                 flags=re.DOTALL,
             )
         )
-        self.assertIsNotNone(
-            re.search(
-                r'public function reloadAction\(\).*?\$this->forceRestart = false;.*?return \$this->reconfigureAction\(\);',
-                source,
-                flags=re.DOTALL,
-            )
+        self.assertIn("$this->runServiceAction($backend, 'reload')", source)
+        self.assertIn('usleep(self::RELOAD_DELAY_US);', source)
+        self.assertIn("gettext('BIND did not accept the configuration reload.')", source)
+
+    def test_reload_and_restart_paths_verify_runtime(self):
+        source = CONTROLLER.read_text()
+        reload_action = re.search(
+            r'public function reloadAction\(\).*?return \[\'status\' => \'ok\'\];',
+            source,
+            flags=re.DOTALL,
         )
+        self.assertIsNotNone(reload_action)
+        self.assertIn('$this->renderConfiguration($backend);', reload_action.group(0))
+        self.assertIn('$this->startAndVerify($backend);', reload_action.group(0))
+        self.assertIn('$this->waitForReload($backend);', reload_action.group(0))
+
+        reconfigure = re.search(
+            r'public function reconfigureAction\(\).*?return \[\'status\' => \'ok\'\];',
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(reconfigure)
+        self.assertIn('$this->stopIfRunning($backend);', reconfigure.group(0))
+        self.assertIn('$this->renderConfiguration($backend);', reconfigure.group(0))
+        self.assertIn('$this->startAndVerify($backend);', reconfigure.group(0))
 
     def test_general_settings_keep_restart_path(self):
         source = VIEW.read_text()
