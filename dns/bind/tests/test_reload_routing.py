@@ -9,11 +9,10 @@ VIEW = ROOT / 'src/opnsense/mvc/app/views/OPNsense/Bind/general.volt'
 
 
 class ReloadRoutingTest(unittest.TestCase):
-    def test_backend_actions_are_verified_and_retried(self):
+    def test_backend_actions_and_startup_are_verified(self):
         source = CONTROLLER.read_text()
-        self.assertIn('private const RELOAD_ATTEMPTS = 5;', source)
-        self.assertIn('private const RELOAD_DELAY_US = 500000;', source)
-        self.assertNotIn('private $forceRestart', source)
+        self.assertIn('private const START_ATTEMPTS = 20;', source)
+        self.assertIn('private const START_DELAY_US = 250000;', source)
         self.assertIsNotNone(
             re.search(
                 r'private function runServiceAction\(.*?return \$response === \'OK\';',
@@ -21,9 +20,11 @@ class ReloadRoutingTest(unittest.TestCase):
                 flags=re.DOTALL,
             )
         )
-        self.assertIn("$this->runServiceAction($backend, 'reload')", source)
-        self.assertIn('usleep(self::RELOAD_DELAY_US);', source)
-        self.assertIn("gettext('BIND did not accept the configuration reload.')", source)
+        self.assertIn("$this->runServiceAction($backend, 'start')", source)
+        self.assertIn('if ($this->serviceRunning()) {', source)
+        self.assertIn('usleep(self::START_DELAY_US);', source)
+        self.assertIn("gettext('BIND did not become ready after start.')", source)
+        self.assertNotIn('waitForReload', source)
 
     def test_reload_and_restart_paths_verify_runtime(self):
         source = CONTROLLER.read_text()
@@ -35,7 +36,8 @@ class ReloadRoutingTest(unittest.TestCase):
         self.assertIsNotNone(reload_action)
         self.assertIn('$this->renderConfiguration($backend);', reload_action.group(0))
         self.assertIn('$this->startAndVerify($backend);', reload_action.group(0))
-        self.assertIn('$this->waitForReload($backend);', reload_action.group(0))
+        self.assertIn('$this->stopIfRunning($backend);', reload_action.group(0))
+        self.assertNotIn('waitForReload', reload_action.group(0))
 
         reconfigure = re.search(
             r'public function reconfigureAction\(\).*?return \[\'status\' => \'ok\'\];',
@@ -46,6 +48,15 @@ class ReloadRoutingTest(unittest.TestCase):
         self.assertIn('$this->stopIfRunning($backend);', reconfigure.group(0))
         self.assertIn('$this->renderConfiguration($backend);', reconfigure.group(0))
         self.assertIn('$this->startAndVerify($backend);', reconfigure.group(0))
+
+    def test_reconfigure_paths_are_serialized(self):
+        source = CONTROLLER.read_text()
+        self.assertIn('use OPNsense\\Core\\FileObject;', source)
+        self.assertIn("private const RECONFIGURE_LOCK = 'bind-reconfigure.lock';", source)
+        self.assertIn('new FileObject(', source)
+        self.assertIn('LOCK_EX', source)
+        self.assertIn('finally {', source)
+        self.assertEqual(source.count('return $this->withServiceLock(function () {'), 2)
 
     def test_general_settings_keep_restart_path(self):
         source = VIEW.read_text()
