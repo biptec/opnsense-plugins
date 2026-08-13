@@ -145,10 +145,13 @@ def main():
         status = run_named("stop")
         cleanup()
         return status
-    if action in {"restart", "reload"}:
+    if action == "restart":
         run_named("stop")
         cleanup()
         return run_named("start")
+    if action == "reload":
+        cleanup()
+        return run_named("reload")
 
     cleanup()
     return run_named("start")
