@@ -213,25 +213,111 @@ class ServiceController extends ApiMutableServiceControllerBase
         }
     }
 
-    private $forceRestart = true;
+    private const RELOAD_ATTEMPTS = 5;
+    private const RELOAD_DELAY_US = 500000;
 
-    protected function reconfigureForceRestart()
+    private function renderConfiguration(Backend $backend)
     {
-        return $this->forceRestart;
+        $result = trim($backend->configdpRun('template reload', [static::$internalServiceTemplate]));
+        if ($result !== 'OK') {
+            throw new UserException(
+                gettext('BIND template generation failed.'),
+                gettext('Configuration exception')
+            );
+        }
+    }
+
+    private function runServiceAction(Backend $backend, string $action)
+    {
+        $response = trim($backend->configdRun(
+            escapeshellarg(static::$internalServiceName) . ' ' . $action
+        ));
+        return $response === 'OK';
+    }
+
+    private function serviceRunning()
+    {
+        return $this->statusAction()['status'] === 'running';
+    }
+
+    private function stopIfRunning(Backend $backend)
+    {
+        if ($this->serviceRunning() && !$this->runServiceAction($backend, 'stop')) {
+            throw new UserException(
+                gettext('BIND failed to stop.'),
+                gettext('Configuration exception')
+            );
+        }
+    }
+
+    private function waitForReload(Backend $backend)
+    {
+        for ($attempt = 1; $attempt <= self::RELOAD_ATTEMPTS; $attempt++) {
+            if ($this->runServiceAction($backend, 'reload')) {
+                return;
+            }
+            if ($attempt < self::RELOAD_ATTEMPTS) {
+                usleep(self::RELOAD_DELAY_US);
+            }
+        }
+        throw new UserException(
+            gettext('BIND did not accept the configuration reload.'),
+            gettext('Configuration exception')
+        );
+    }
+
+    private function startAndVerify(Backend $backend)
+    {
+        if (!$this->runServiceAction($backend, 'start')) {
+            throw new UserException(
+                gettext('BIND failed to start.'),
+                gettext('Configuration exception')
+            );
+        }
+        $this->waitForReload($backend);
     }
 
     public function reloadAction()
     {
-        $this->forceRestart = false;
-        return $this->reconfigureAction();
+        if (!$this->request->isPost()) {
+            return ['status' => 'failed'];
+        }
+
+        $this->validateConfiguration();
+        $backend = new Backend();
+        $enabled = $this->serviceEnabled();
+        $running = $this->serviceRunning();
+
+        if (!$enabled) {
+            $this->stopIfRunning($backend);
+        }
+        $this->renderConfiguration($backend);
+
+        if ($enabled) {
+            if (!$running) {
+                $this->startAndVerify($backend);
+            } else {
+                $this->waitForReload($backend);
+            }
+        }
+        return ['status' => 'ok'];
     }
 
     public function reconfigureAction()
     {
-        if ($this->request->isPost()) {
-            $this->validateConfiguration();
+        if (!$this->request->isPost()) {
+            return ['status' => 'failed'];
         }
-        return parent::reconfigureAction();
+
+        $this->validateConfiguration();
+        $backend = new Backend();
+        $this->stopIfRunning($backend);
+        $this->renderConfiguration($backend);
+
+        if ($this->serviceEnabled()) {
+            $this->startAndVerify($backend);
+        }
+        return ['status' => 'ok'];
     }
 
     public function dnsblAction()
