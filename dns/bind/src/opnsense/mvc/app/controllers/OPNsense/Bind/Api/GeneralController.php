@@ -32,6 +32,7 @@ namespace OPNsense\Bind\Api;
 
 use OPNsense\Base\ApiMutableModelControllerBase;
 use OPNsense\Core\Backend;
+use OPNsense\Core\Config;
 use OPNsense\Bind\Domain;
 use OPNsense\Bind\View;
 
@@ -39,6 +40,37 @@ class GeneralController extends ApiMutableModelControllerBase
 {
     protected static $internalModelClass = '\OPNsense\Bind\General';
     protected static $internalModelName = 'general';
+
+    protected function getModelNodes()
+    {
+        $nodes = parent::getModelNodes();
+        unset($nodes['rndcsecret']);
+        return $nodes;
+    }
+
+    public function setAction()
+    {
+        $result = ['result' => 'failed'];
+        if ($this->request->isPost()) {
+            Config::getInstance()->lock();
+            $model = $this->getModel();
+            $currentSecret = (string)$model->rndcsecret;
+            $settings = $this->request->getPost(static::$internalModelName);
+            if (!is_array($settings)) {
+                $settings = [];
+            }
+            if (empty($settings['rndcsecret'])) {
+                $settings['rndcsecret'] = $currentSecret;
+            }
+            $model->setNodes($settings);
+            $result = $this->validate();
+            if (empty($result['result'])) {
+                $this->setActionHook();
+                return $this->save(false, true);
+            }
+        }
+        return $result;
+    }
 
     private function getZoneRequest()
     {
