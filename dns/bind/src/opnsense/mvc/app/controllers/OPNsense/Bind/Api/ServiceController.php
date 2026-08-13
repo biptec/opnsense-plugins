@@ -33,6 +33,7 @@ namespace OPNsense\Bind\Api;
 use OPNsense\Base\ApiMutableServiceControllerBase;
 use OPNsense\Base\UserException;
 use OPNsense\Core\Backend;
+use OPNsense\Core\FileObject;
 use OPNsense\Bind\General;
 use OPNsense\Bind\Dnsbl;
 use OPNsense\Bind\Domain;
@@ -215,6 +216,22 @@ class ServiceController extends ApiMutableServiceControllerBase
 
     private const RELOAD_ATTEMPTS = 5;
     private const RELOAD_DELAY_US = 500000;
+    private const RECONFIGURE_LOCK = 'bind-reconfigure.lock';
+
+    private function withServiceLock(callable $callback)
+    {
+        $lock = new FileObject(
+            sys_get_temp_dir() . '/' . self::RECONFIGURE_LOCK,
+            'a+',
+            0600,
+            LOCK_EX
+        );
+        try {
+            return $callback();
+        } finally {
+            unset($lock);
+        }
+    }
 
     private function renderConfiguration(Backend $backend)
     {
@@ -283,24 +300,26 @@ class ServiceController extends ApiMutableServiceControllerBase
             return ['status' => 'failed'];
         }
 
-        $this->validateConfiguration();
-        $backend = new Backend();
-        $enabled = $this->serviceEnabled();
-        $running = $this->serviceRunning();
+        return $this->withServiceLock(function () {
+            $this->validateConfiguration();
+            $backend = new Backend();
+            $enabled = $this->serviceEnabled();
+            $running = $this->serviceRunning();
 
-        if (!$enabled) {
-            $this->stopIfRunning($backend);
-        }
-        $this->renderConfiguration($backend);
-
-        if ($enabled) {
-            if (!$running) {
-                $this->startAndVerify($backend);
-            } else {
-                $this->waitForReload($backend);
+            if (!$enabled) {
+                $this->stopIfRunning($backend);
             }
-        }
-        return ['status' => 'ok'];
+            $this->renderConfiguration($backend);
+
+            if ($enabled) {
+                if (!$running) {
+                    $this->startAndVerify($backend);
+                } else {
+                    $this->waitForReload($backend);
+                }
+            }
+            return ['status' => 'ok'];
+        });
     }
 
     public function reconfigureAction()
@@ -309,15 +328,17 @@ class ServiceController extends ApiMutableServiceControllerBase
             return ['status' => 'failed'];
         }
 
-        $this->validateConfiguration();
-        $backend = new Backend();
-        $this->stopIfRunning($backend);
-        $this->renderConfiguration($backend);
+        return $this->withServiceLock(function () {
+            $this->validateConfiguration();
+            $backend = new Backend();
+            $this->stopIfRunning($backend);
+            $this->renderConfiguration($backend);
 
-        if ($this->serviceEnabled()) {
-            $this->startAndVerify($backend);
-        }
-        return ['status' => 'ok'];
+            if ($this->serviceEnabled()) {
+                $this->startAndVerify($backend);
+            }
+            return ['status' => 'ok'];
+        });
     }
 
     public function dnsblAction()

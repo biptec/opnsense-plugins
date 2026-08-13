@@ -47,6 +47,15 @@ class ReloadRoutingTest(unittest.TestCase):
         self.assertIn('$this->renderConfiguration($backend);', reconfigure.group(0))
         self.assertIn('$this->startAndVerify($backend);', reconfigure.group(0))
 
+    def test_reconfigure_paths_are_serialized(self):
+        source = CONTROLLER.read_text()
+        self.assertIn('use OPNsense\\Core\\FileObject;', source)
+        self.assertIn("private const RECONFIGURE_LOCK = 'bind-reconfigure.lock';", source)
+        self.assertIn('new FileObject(', source)
+        self.assertIn('LOCK_EX', source)
+        self.assertIn('finally {', source)
+        self.assertEqual(source.count('return $this->withServiceLock(function () {'), 2)
+
     def test_general_settings_keep_restart_path(self):
         source = VIEW.read_text()
         general = re.search(
