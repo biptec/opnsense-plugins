@@ -213,6 +213,19 @@ class ServiceController extends ApiMutableServiceControllerBase
         }
     }
 
+    private $forceRestart = true;
+
+    protected function reconfigureForceRestart()
+    {
+        return $this->forceRestart;
+    }
+
+    public function reloadAction()
+    {
+        $this->forceRestart = false;
+        return $this->reconfigureAction();
+    }
+
     public function reconfigureAction()
     {
         if ($this->request->isPost()) {

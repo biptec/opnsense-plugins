@@ -623,7 +623,7 @@ $(document).ready(function() {
         saveFormToEndpoint(url = "/api/bind/dnsbl/set", formid = 'frm_dnsbl_settings', callback_ok = function() {
             $("#saveAct_dnsbl_progress").addClass("fa fa-spinner fa-pulse");
             ajaxCall(url = "/api/bind/service/dnsbl", sendData = {}, callback = function(data, status) {
-                ajaxCall(url = "/api/bind/service/reconfigure", sendData = {}, callback = function(data, status) {
+                ajaxCall(url = "/api/bind/service/reload", sendData = {}, callback = function(data, status) {
                     updateServiceControlUI('bind');
                     $("#saveAct_dnsbl_progress").removeClass("fa fa-spinner fa-pulse");
                 });
@@ -634,7 +634,7 @@ $(document).ready(function() {
     $("#saveAct_acl").click(function() {
         saveFormToEndpoint(url = "/api/bind/acl/set", formid = 'frm_general_settings', callback_ok = function() {
             $("#saveAct_acl_progress").addClass("fa fa-spinner fa-pulse");
-            ajaxCall(url = "/api/bind/service/reconfigure", sendData = {}, callback = function(data, status) {
+            ajaxCall(url = "/api/bind/service/reload", sendData = {}, callback = function(data, status) {
                 updateServiceControlUI('bind');
                 $("#saveAct_acl_progress").removeClass("fa fa-spinner fa-pulse");
             });
@@ -643,7 +643,7 @@ $(document).ready(function() {
 
     $("#saveAct_view").click(function() {
         $("#saveAct_view_progress").addClass("fa fa-spinner fa-pulse");
-        ajaxCall("/api/bind/service/reconfigure", {}, function(data, status) {
+        ajaxCall("/api/bind/service/reload", {}, function(data, status) {
             updateServiceControlUI('bind');
             $("#saveAct_view_progress").removeClass("fa fa-spinner fa-pulse");
         });
@@ -651,7 +651,7 @@ $(document).ready(function() {
 
     $("#saveAct_tsig").click(function() {
         $("#saveAct_tsig_progress").addClass("fa fa-spinner fa-pulse");
-        ajaxCall("/api/bind/service/reconfigure", {}, function(data, status) {
+        ajaxCall("/api/bind/service/reload", {}, function(data, status) {
             updateServiceControlUI('bind');
             $("#saveAct_tsig_progress").removeClass("fa fa-spinner fa-pulse");
         });
@@ -659,7 +659,7 @@ $(document).ready(function() {
 
     $(".saveAct_domain").click(function() {
         $(".saveAct_domain_progress").addClass("fa fa-spinner fa-pulse");
-        ajaxCall("/api/bind/service/reconfigure", {}, function(data, status) {
+        ajaxCall("/api/bind/service/reload", {}, function(data, status) {
             updateServiceControlUI('bind');
             $(".saveAct_domain_progress").removeClass("fa fa-spinner fa-pulse");
         });
