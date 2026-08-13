@@ -9,7 +9,7 @@ VIEW = ROOT / 'src/opnsense/mvc/app/views/OPNsense/Bind/general.volt'
 
 
 class ReloadRoutingTest(unittest.TestCase):
-    def test_reload_action_selects_soft_reconfigure(self):
+    def test_reload_action_keeps_restart_reconfigure(self):
         source = CONTROLLER.read_text()
         self.assertIn('private $forceRestart = true;', source)
         self.assertIsNotNone(
@@ -19,13 +19,13 @@ class ReloadRoutingTest(unittest.TestCase):
                 flags=re.DOTALL,
             )
         )
-        self.assertIsNotNone(
-            re.search(
-                r'public function reloadAction\(\).*?\$this->forceRestart = false;.*?return \$this->reconfigureAction\(\);',
-                source,
-                flags=re.DOTALL,
-            )
+        reload_action = re.search(
+            r'public function reloadAction\(\)(.*?return \$this->reconfigureAction\(\);)',
+            source,
+            flags=re.DOTALL,
         )
+        self.assertIsNotNone(reload_action)
+        self.assertNotIn('$this->forceRestart = false;', reload_action.group(1))
 
     def test_general_settings_keep_restart_path(self):
         source = VIEW.read_text()

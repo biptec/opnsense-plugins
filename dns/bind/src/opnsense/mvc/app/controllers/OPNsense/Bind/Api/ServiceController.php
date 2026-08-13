@@ -222,7 +222,9 @@ class ServiceController extends ApiMutableServiceControllerBase
 
     public function reloadAction()
     {
-        $this->forceRestart = false;
+        // A full restart is intentional here. Global rndc reload is asynchronous
+        // and can race consecutive API mutations, leaving views or signed zones
+        // temporarily stale. Keep the endpoint contract while favoring correctness.
         return $this->reconfigureAction();
     }
 
