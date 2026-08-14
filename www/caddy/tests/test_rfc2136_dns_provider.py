@@ -7,6 +7,7 @@ MODEL = CADDY_ROOT / "src/opnsense/mvc/app/models/OPNsense/Caddy/Caddy.xml"
 FORM = CADDY_ROOT / "src/opnsense/mvc/app/controllers/OPNsense/Caddy/forms/general.xml"
 MODEL_PHP = CADDY_ROOT / "src/opnsense/mvc/app/models/OPNsense/Caddy/Caddy.php"
 TEMPLATE = CADDY_ROOT / "src/opnsense/service/templates/OPNsense/Caddy/Caddyfile"
+VIEW = CADDY_ROOT / "src/opnsense/mvc/app/views/OPNsense/Caddy/general.volt"
 
 class Rfc2136DnsProviderTest(unittest.TestCase):
     @classmethod
@@ -39,6 +40,22 @@ class Rfc2136DnsProviderTest(unittest.TestCase):
         }
         self.assertEqual(fields["caddy.general.TlsDnsRfc2136Key"], "password")
         self.assertEqual(fields["caddy.general.TlsDnsRfc2136KeyAlg"], "dropdown")
+
+    def test_webui_switches_provider_specific_fields(self) -> None:
+        view = VIEW.read_text()
+        self.assertIn("function updateDnsProviderFields()", view)
+        self.assertIn("provider === 'cloudflare'", view)
+        self.assertIn("provider === 'rfc2136'", view)
+        for field in (
+            "TlsDnsRfc2136Server",
+            "TlsDnsRfc2136Port",
+            "TlsDnsRfc2136KeyName",
+            "TlsDnsRfc2136KeyAlg",
+            "TlsDnsRfc2136Key",
+        ):
+            self.assertIn(field, view)
+        self.assertIn("updateDnsProviderFields();", view)
+        self.assertIn(".on('change', updateDnsProviderFields)", view)
 
     def test_model_requires_complete_rfc2136_configuration(self) -> None:
         model_php = MODEL_PHP.read_text()

@@ -26,12 +26,31 @@
 
 <script>
     $(document).ready(function() {
+        const rfc2136Fields = [
+            'TlsDnsRfc2136Server',
+            'TlsDnsRfc2136Port',
+            'TlsDnsRfc2136KeyName',
+            'TlsDnsRfc2136KeyAlg',
+            'TlsDnsRfc2136Key'
+        ];
+
+        function updateDnsProviderFields() {
+            const provider = $('#caddy\\.general\\.TlsDnsProvider').val();
+            $('#caddy\\.general\\.TlsDnsApiKey').closest('tr').toggle(provider === 'cloudflare');
+            rfc2136Fields.forEach(function(field) {
+                $('#caddy\\.general\\.' + field).closest('tr').toggle(provider === 'rfc2136');
+            });
+        }
+
         // Initial setup
         mapDataToFormUI({'frm_general': "/api/caddy/general/get"}).done(function() {
             formatTokenizersUI();
             $('.selectpicker').selectpicker('refresh');
+            updateDnsProviderFields();
             updateServiceControlUI('caddy');
         });
+
+        $('#caddy\\.general\\.TlsDnsProvider').on('change', updateDnsProviderFields);
 
         // Event binding for saving forms
         $('[id^="save_general-"]').each(function () {
