@@ -1,7 +1,7 @@
 <model>
     <mount>//Pischem/caddy</mount>
     <description>Caddy Reverse Proxy</description>
-    <version>1.3.9</version>
+    <version>1.4.0</version>
     <items>
         <general>
             <enabled type="BooleanField">
@@ -32,9 +32,32 @@
                 <BlankDesc>None (default)</BlankDesc>
                 <OptionValues>
                     <cloudflare>Cloudflare</cloudflare>
+                    <rfc2136>RFC2136</rfc2136>
                 </OptionValues>
             </TlsDnsProvider>
             <TlsDnsApiKey type="TextField"/>
+            <TlsDnsRfc2136Server type="NetworkField">
+                <NetMaskAllowed>N</NetMaskAllowed>
+                <WildcardEnabled>N</WildcardEnabled>
+            </TlsDnsRfc2136Server>
+            <TlsDnsRfc2136Port type="PortField">
+                <Default>53</Default>
+            </TlsDnsRfc2136Port>
+            <TlsDnsRfc2136KeyName type="TextField">
+                <Mask>/^[0-9a-zA-Z_.\-]{1,255}$/u</Mask>
+                <ValidationMessage>Use a valid TSIG key name containing letters, digits, dots, underscores or hyphens.</ValidationMessage>
+            </TlsDnsRfc2136KeyName>
+            <TlsDnsRfc2136KeyAlg type="OptionField">
+                <Default>hmac-sha256</Default>
+                <OptionValues>
+                    <hmac-sha512>HMAC-SHA512</hmac-sha512>
+                    <hmac-sha384>HMAC-SHA384</hmac-sha384>
+                    <hmac-sha256>HMAC-SHA256</hmac-sha256>
+                    <hmac-sha224>HMAC-SHA224</hmac-sha224>
+                    <hmac-sha1>HMAC-SHA1</hmac-sha1>
+                </OptionValues>
+            </TlsDnsRfc2136KeyAlg>
+            <TlsDnsRfc2136Key type="Base64Field"/>
             <TlsDnsPropagationTimeout type="BooleanField"/>
             <TlsDnsPropagationTimeoutPeriod type="IntegerField">
                 <MinimumValue>1</MinimumValue>

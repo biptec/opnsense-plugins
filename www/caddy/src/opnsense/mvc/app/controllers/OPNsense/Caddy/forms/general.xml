@@ -164,6 +164,37 @@
             <help>This is the standard field for the API Key.</help>
         </field>
         <field>
+            <id>caddy.general.TlsDnsRfc2136Server</id>
+            <label>RFC2136 Server</label>
+            <type>text</type>
+            <help>DNS server address used for RFC2136 dynamic updates.</help>
+        </field>
+        <field>
+            <id>caddy.general.TlsDnsRfc2136Port</id>
+            <label>RFC2136 Server Port</label>
+            <type>text</type>
+            <hint>53</hint>
+            <help>DNS server port used for RFC2136 dynamic updates.</help>
+        </field>
+        <field>
+            <id>caddy.general.TlsDnsRfc2136KeyName</id>
+            <label>RFC2136 TSIG Key Name</label>
+            <type>text</type>
+            <help>TSIG key name authorized by the authoritative DNS server.</help>
+        </field>
+        <field>
+            <id>caddy.general.TlsDnsRfc2136KeyAlg</id>
+            <label>RFC2136 TSIG Algorithm</label>
+            <type>dropdown</type>
+            <help>TSIG HMAC algorithm. It must match the authoritative DNS server key.</help>
+        </field>
+        <field>
+            <id>caddy.general.TlsDnsRfc2136Key</id>
+            <label>RFC2136 TSIG Secret</label>
+            <type>password</type>
+            <help>Base64-encoded TSIG secret used only for RFC2136 updates.</help>
+        </field>
+        <field>
             <type>header</type>
             <label>DNS Propagation</label>
         </field>
