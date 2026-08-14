@@ -175,6 +175,24 @@ class Caddy extends BaseModel
         }
     }
 
+    private function checkDnsProviderSettings($messages)
+    {
+        if ($this->general->TlsDnsProvider->isEqual('rfc2136')) {
+            $required = [
+                'TlsDnsRfc2136Server' => 'RFC2136 server is required.',
+                'TlsDnsRfc2136Port' => 'RFC2136 server port is required.',
+                'TlsDnsRfc2136KeyName' => 'RFC2136 TSIG key name is required.',
+                'TlsDnsRfc2136KeyAlg' => 'RFC2136 TSIG algorithm is required.',
+                'TlsDnsRfc2136Key' => 'RFC2136 TSIG secret is required.'
+            ];
+            foreach ($required as $field => $message) {
+                if ($this->general->{$field}->isEmpty()) {
+                    $messages->appendMessage(new Message(gettext($message), 'general.' . $field));
+                }
+            }
+        }
+    }
+
     private function checkLayer4Matchers($messages)
     {
         foreach ($this->reverseproxy->layer4->iterateItems() as $layer4) {
@@ -316,6 +334,7 @@ class Caddy extends BaseModel
         $this->checkForUniquePortCombos($messages);
         $this->checkDisableTlsConflicts($messages);
         $this->checkSuperuserPorts($messages);
+        $this->checkDnsProviderSettings($messages);
         $this->checkLayer4Matchers($messages);
 
         return $messages;

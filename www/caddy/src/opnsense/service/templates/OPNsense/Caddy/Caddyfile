@@ -28,6 +28,19 @@
 
 {% set generalSettings = helpers.getNodeByTag('Pischem.caddy.general') %}
 
+{% macro dns_provider_configuration(directive, dnsProvider, dnsApiKey="", rfc2136Server="", rfc2136Port="53", rfc2136KeyName="", rfc2136KeyAlg="hmac-sha256", rfc2136Key="") %}
+    {% if dnsProvider == "rfc2136" %}
+        {{ directive }} rfc2136 {
+            key_name "{{ rfc2136KeyName }}"
+            key_alg "{{ rfc2136KeyAlg }}"
+            key "{{ rfc2136Key }}"
+            server "{% if ':' in rfc2136Server %}[{{ rfc2136Server }}]{% else %}{{ rfc2136Server }}{% endif %}:{{ rfc2136Port }}"
+        }
+    {% elif dnsProvider %}
+        {{ directive }} {{ dnsProvider }} {{ dnsApiKey }}
+    {% endif %}
+{% endmacro %}
+
 {# Print as comments if Caddy runs as root or www user, as information in support cases. #}
 {% if generalSettings.DisableSuperuser|default("0") == "1" %}
 # caddy_user=www
@@ -141,6 +154,11 @@
     #}
     {% set dnsProvider = helpers.toList('Pischem.caddy.general.TlsDnsProvider') | first %}
     {% set dnsApiKey = generalSettings.TlsDnsApiKey %}
+    {% set dnsRfc2136Server = generalSettings.TlsDnsRfc2136Server %}
+    {% set dnsRfc2136Port = generalSettings.TlsDnsRfc2136Port %}
+    {% set dnsRfc2136KeyName = generalSettings.TlsDnsRfc2136KeyName %}
+    {% set dnsRfc2136KeyAlg = generalSettings.TlsDnsRfc2136KeyAlg %}
+    {% set dnsRfc2136Key = generalSettings.TlsDnsRfc2136Key %}
     {% set dynDnsSimpleHttp = generalSettings.DynDnsSimpleHttp %}
     {% set dynDnsInterface = generalSettings.DynDnsInterface %}
     {% set dynDnsUpdateOnly = generalSettings.DynDnsUpdateOnly %}
@@ -172,7 +190,7 @@
 
     {% if dnsProvider and dynDnsDomains|length > 0 %}
         dynamic_dns {
-                provider {{ dnsProvider }} {{ dnsApiKey }}
+            {{ dns_provider_configuration("provider", dnsProvider, dnsApiKey, dnsRfc2136Server, dnsRfc2136Port, dnsRfc2136KeyName, dnsRfc2136KeyAlg, dnsRfc2136Key) }}
             domains {
                 {% for domain in dynDnsDomains %}
                     {{ domain }}
@@ -208,7 +226,7 @@
     #            https://caddyserver.com/docs/caddyfile/options#ech
     #}
     {% if generalSettings.TlsDnsEchDomain|default("") and dnsProvider %}
-        dns {{ dnsProvider }} {{ dnsApiKey }}
+        {{ dns_provider_configuration("dns", dnsProvider, dnsApiKey, dnsRfc2136Server, dnsRfc2136Port, dnsRfc2136KeyName, dnsRfc2136KeyAlg, dnsRfc2136Key) }}
         ech {{ generalSettings.TlsDnsEchDomain }}
     {% endif %}
 
@@ -316,6 +334,11 @@ http://{{ domain }} {
     clientAuthMode="",
     dnsProvider="",
     dnsApiKey="",
+    rfc2136Server="",
+    rfc2136Port="53",
+    rfc2136KeyName="",
+    rfc2136KeyAlg="hmac-sha256",
+    rfc2136Key="",
     tlsDnsPropagationTimeout="",
     tlsDnsPropagationTimeoutPeriod="",
     tlsDnsPropagationDelay="",
@@ -325,7 +348,7 @@ http://{{ domain }} {
         tls {% if customCert %}/usr/local/etc/caddy/certificates/{{ customCert }}.pem /usr/local/etc/caddy/certificates/{{ customCert }}.key{% endif %} {
             {% if not customCert and (dnsChallenge == "1" and dnsProvider) %}
             issuer acme {
-                dns {{ dnsProvider }} {{ dnsApiKey }}
+                {{ dns_provider_configuration("dns", dnsProvider, dnsApiKey, rfc2136Server, rfc2136Port, rfc2136KeyName, rfc2136KeyAlg, rfc2136Key) }}
                 {% if dnsChallengeOverrideDomain %}
                 dns_challenge_override_domain {{ dnsChallengeOverrideDomain }}
                 {% endif %}
@@ -636,6 +659,11 @@ http://{{ domain }} {
                 clientAuthMode=reverse.ClientAuthMode|default(""),
                 dnsProvider=generalSettings.TlsDnsProvider,
                 dnsApiKey=generalSettings.TlsDnsApiKey,
+                rfc2136Server=generalSettings.TlsDnsRfc2136Server,
+                rfc2136Port=generalSettings.TlsDnsRfc2136Port,
+                rfc2136KeyName=generalSettings.TlsDnsRfc2136KeyName,
+                rfc2136KeyAlg=generalSettings.TlsDnsRfc2136KeyAlg,
+                rfc2136Key=generalSettings.TlsDnsRfc2136Key,
                 tlsDnsPropagationTimeout=generalSettings.TlsDnsPropagationTimeout,
                 tlsDnsPropagationTimeoutPeriod=generalSettings.TlsDnsPropagationTimeoutPeriod,
                 tlsDnsPropagationDelay=generalSettings.TlsDnsPropagationDelay,
