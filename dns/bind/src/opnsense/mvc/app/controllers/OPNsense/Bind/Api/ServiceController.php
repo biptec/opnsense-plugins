@@ -134,14 +134,35 @@ class ServiceController extends ApiMutableServiceControllerBase
             return;
         }
 
+        $sharedZones = [];
+        foreach ($domainRoot->iterateItems() as $candidate) {
+            if ((string)$candidate->enabled !== '1') {
+                continue;
+            }
+            $candidateType = (string)$candidate->type;
+            $candidateView = (string)$candidate->view;
+            if (($candidateType === 'primary' || $candidateType === 'secondary') && $candidateView !== '') {
+                $candidateName = strtolower(rtrim((string)$candidate->domainname, '.'));
+                $sharedZones[$candidateView . ':' . $candidateName] = true;
+            }
+        }
+
         foreach ($domainRoot->iterateItems() as $domain) {
             if ((string)$domain->enabled !== '1') {
                 continue;
             }
             $viewUuid = (string)$domain->view;
             $domainName = strtolower(rtrim((string)$domain->domainname, '.'));
+            $domainType = (string)$domain->type;
 
-            if ((string)$domain->type === 'primary' && (string)$domain->primarytransferkey !== '') {
+            if ($domainType === 'inview' && empty($enabledViews)) {
+                throw new UserException(
+                    sprintf(gettext('In-view zone "%s" requires BIND views to be enabled.'), (string)$domain->domainname),
+                    gettext('Configuration exception')
+                );
+            }
+
+            if ($domainType === 'primary' && (string)$domain->primarytransferkey !== '') {
                 $transferKeyUuid = (string)$domain->primarytransferkey;
                 if (!isset($enabledTsigKeys[$transferKeyUuid])) {
                     throw new UserException(
@@ -154,7 +175,7 @@ class ServiceController extends ApiMutableServiceControllerBase
                 }
             }
 
-            if ((string)$domain->type === 'primary' && (string)$domain->updatekeys !== '') {
+            if ($domainType === 'primary' && (string)$domain->updatekeys !== '') {
                 foreach (explode(',', (string)$domain->updatekeys) as $keyUuid) {
                     if (!isset($enabledTsigKeys[$keyUuid])) {
                         throw new UserException(
@@ -205,6 +226,44 @@ class ServiceController extends ApiMutableServiceControllerBase
                     gettext('Zone "%s" is defined more than once while BIND views are disabled.'),
                     (string)$domain->domainname
                 );
+            }
+
+            if ($domainType === 'inview') {
+                $sourceViewUuid = (string)$domain->inview;
+                if ($sourceViewUuid === '' || !isset($enabledViews[$sourceViewUuid])) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('In-view zone "%s" references a missing or disabled source view.'),
+                            (string)$domain->domainname
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+                if ($sourceViewUuid === $viewUuid) {
+                    throw new UserException(
+                        sprintf(gettext('In-view zone "%s" cannot reference its own view.'), (string)$domain->domainname),
+                        gettext('Configuration exception')
+                    );
+                }
+                if ($enabledViews[$sourceViewUuid]['sequence'] >= $enabledViews[$viewUuid]['sequence']) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('In-view zone "%s" must reference a source view ordered before its target view.'),
+                            (string)$domain->domainname
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+                if (!isset($sharedZones[$sourceViewUuid . ':' . $domainName])) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('In-view zone "%s" has no matching primary or secondary zone in source view "%s".'),
+                            (string)$domain->domainname,
+                            $enabledViews[$sourceViewUuid]['name']
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
             }
 
             if (isset($zoneNames[$zoneKey])) {

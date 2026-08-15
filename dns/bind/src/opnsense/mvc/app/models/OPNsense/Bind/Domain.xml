@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/bind/domain</mount>
     <description>BIND domain configuration</description>
-    <version>1.1.5</version>
+    <version>1.1.6</version>
     <items>
         <domains>
             <domain type="ArrayField">
@@ -25,8 +25,18 @@
                         <primary>primary</primary>
                         <secondary>secondary</secondary>
                         <forward>forward</forward>
+                        <inview>in-view</inview>
                     </OptionValues>
                 </type>
+                <inview type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.View</source>
+                            <items>views.view</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                </inview>
                 <primaryip type="NetworkField">
                     <AsList>Y</AsList>
                 </primaryip>
