@@ -166,7 +166,7 @@ class ServiceController extends ApiControllerBase
         // first generate template based on current configuration
         $backend->configdRun('template reload OPNsense/AcmeClient');
         // finally run the syntax check
-        $response = $backend->configdRun("acmeclient configtest");
+        $response = $backend->configdRun("acmeclient http-configtest");
         return array("result" => $response);
     }
 

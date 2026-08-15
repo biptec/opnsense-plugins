@@ -1,0 +1,49 @@
+name: os-acme-client quality
+
+on:
+  pull_request:
+    paths:
+      - "security/acme-client/**"
+      - ".github/workflows/acme-client-quality.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "security/acme-client/**"
+      - ".github/workflows/acme-client-quality.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PHP CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli
+
+      - name: Validate PHP
+        run: |
+          find security/acme-client/src/opnsense/mvc/app -name '*.php' -print0 \
+            | xargs -0 -r -n1 php -l
+
+      - name: Validate XML
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          for path in sorted(Path("security/acme-client/src/opnsense/mvc/app").rglob("*.xml")):
+              ET.parse(path)
+              print(f"XML OK: {path}")
+          PY
+
+      - name: Run ACME Client unit tests
+        run: python3 -m unittest discover -s security/acme-client/tests -p 'test_*.py'
+
+      - name: Check whitespace
+        run: git diff --check
