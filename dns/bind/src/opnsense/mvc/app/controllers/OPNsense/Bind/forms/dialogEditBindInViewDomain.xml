@@ -21,6 +21,6 @@
         <id>domain.inview</id>
         <label>Source View</label>
         <type>dropdown</type>
-        <help>The source view must be enabled, ordered before this view, and contain the same primary or secondary zone.</help>
+        <help>The source view must be enabled, ordered before this view, and contain the same primary or secondary zone. Zone options, including allow-query, come from the source zone, so its ACLs must permit clients of every referencing view.</help>
     </field>
 </form>
