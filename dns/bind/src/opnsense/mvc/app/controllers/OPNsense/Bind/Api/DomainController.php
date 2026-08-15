@@ -85,6 +85,18 @@ class DomainController extends ApiMutableModelControllerBase
         );
     }
 
+    public function searchInViewDomainAction()
+    {
+        return $this->searchBase(
+            'domains.domain',
+            [ 'enabled', 'view', 'type', 'domainname', 'inview' ],
+            'domainname',
+            function ($record) {
+                return $record->type->getNodeData()['inview']['selected'] === 1;
+            }
+        );
+    }
+
     public function getDomainAction($uuid = null)
     {
         return $this->getBase('domain', 'domains.domain', $uuid);
@@ -103,6 +115,11 @@ class DomainController extends ApiMutableModelControllerBase
     public function addForwardDomainAction($uuid = null)
     {
         return $this->addBase('domain', 'domains.domain', ['type' => 'forward']);
+    }
+
+    public function addInViewDomainAction($uuid = null)
+    {
+        return $this->addBase('domain', 'domains.domain', ['type' => 'inview']);
     }
 
     public function delDomainAction($uuid)

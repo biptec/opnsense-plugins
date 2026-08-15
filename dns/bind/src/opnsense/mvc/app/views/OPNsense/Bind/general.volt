@@ -36,6 +36,7 @@
     <li><a data-toggle="tab" href="#primary-domains">{{ lang._('Primary Zones') }}</a></li>
     <li><a data-toggle="tab" href="#secondary-domains">{{ lang._('Secondary Zones') }}</a></li>
     <li><a data-toggle="tab" href="#forward-domains">{{ lang._('Forward Zones') }}</a></li>
+    <li><a data-toggle="tab" href="#in-view-domains">{{ lang._('In-view Zones') }}</a></li>
 </ul>
 
 <div class="tab-content content-box tab-content">
@@ -294,6 +295,33 @@
             <br /><br />
         </div>
     </div>
+    <div id="in-view-domains" class="tab-pane fade in">
+        <div class="col-md-12">
+            <h2>{{ lang._('Zones') }}</h2>
+            <div class="alert alert-info">{{ lang._('An in-view zone reuses the same in-memory primary or secondary zone from an earlier view. The source view must have a lower sequence.') }}</div>
+        </div>
+        <div id="in-view-domains-area" class="table-responsive">
+            <table id="grid-in-view-domains" class="table table-condensed table-hover table-striped" data-editAlert="ChangeMessage" data-editDialog="dialogEditBindInViewDomain">
+                <thead><tr>
+                    <th data-column-id="enabled" data-type="string" data-formatter="rowtoggle">{{ lang._('Enabled') }}</th>
+                    <th data-column-id="view" data-type="string" data-visible="true">{{ lang._('View') }}</th>
+                    <th data-column-id="domainname" data-type="string" data-visible="true">{{ lang._('Zone') }}</th>
+                    <th data-column-id="inview" data-type="string" data-visible="true">{{ lang._('Source View') }}</th>
+                    <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
+                    <th data-column-id="commands" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
+                </tr></thead>
+                <tbody></tbody>
+                <tfoot><tr><td colspan="5"></td><td>
+                    <button data-action="add" type="button" class="btn btn-xs btn-default"><span class="fa fa-plus"></span></button>
+                </td></tr></tfoot>
+            </table>
+        </div>
+        <div class="col-md-12">
+            <hr />
+            <button class="btn btn-primary saveAct_domain" type="button"><b>{{ lang._('Save') }}</b> <i class="saveAct_domain_progress"></i></button>
+            <br /><br />
+        </div>
+    </div>
 </div>
 
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindAcl,'id':'dialogEditBindAcl','label':lang._('Edit ACL')])}}
@@ -302,6 +330,7 @@
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindPrimaryDomain,'id':'dialogEditBindPrimaryDomain','label':lang._('Edit Primary Zone')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindSecondaryDomain,'id':'dialogEditBindSecondaryDomain','label':lang._('Edit Secondary Zone')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindForwardDomain,'id':'dialogEditBindForwardDomain','label':lang._('Edit Forward Zone')])}}
+{{ partial("layout_partials/base_dialog",['fields':formDialogEditBindInViewDomain,'id':'dialogEditBindInViewDomain','label':lang._('Edit In-view Zone')])}}
 {{ partial("layout_partials/base_dialog",['fields':formDialogEditBindRecord,'id':'dialogEditBindRecord','label':lang._('Edit Record')])}}
 
 <style>
@@ -579,6 +608,21 @@ $(document).ready(function() {
         let ids = $("#grid-forward-domains").bootgrid("getCurrentRows");
         if (ids.length > 0) {
             $("#grid-forward-domains").bootgrid('select', [ids[0].uuid]);
+        }
+    });
+
+    $("#grid-in-view-domains").UIBootgrid({
+        'search': '/api/bind/domain/search_in_view_domain',
+        'get': '/api/bind/domain/get_domain/',
+        'set': '/api/bind/domain/set_domain/',
+        'add': '/api/bind/domain/add_in_view_domain/',
+        'del': '/api/bind/domain/del_domain/',
+        'toggle': '/api/bind/domain/toggle_domain/',
+        options: {
+            selection: false,
+            multiSelect: false,
+            rowSelect: false,
+            rowCount: [7, 14, 20, 50, 100, -1]
         }
     });
 
