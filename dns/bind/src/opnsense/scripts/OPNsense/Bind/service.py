@@ -7,6 +7,7 @@ per-zone directory. Cleanup is intentionally limited to those namespaces, so
 custom includes and unrelated files in namedb remain untouched.
 """
 
+import json
 import os
 import re
 import shutil
@@ -20,6 +21,9 @@ PRIMARY_DIR = "/usr/local/etc/namedb/primary"
 SECONDARY_DIR = "/usr/local/etc/namedb/secondary"
 KEY_ROOT = "/usr/local/etc/namedb/keys"
 MARKER = ".opnsense-managed"
+RUNTIME_SNAPSHOT = "/var/run/opnsense-bind-runtime.json"
+NAMED_COMPILEZONE = "/usr/local/bin/named-compilezone"
+NAMED_JOURNALPRINT = "/usr/local/bin/named-journalprint"
 UUID_RE = re.compile(
     r"^(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.db(?:\..*)?$",
     re.IGNORECASE,
@@ -124,6 +128,264 @@ def reconcile_key_directories(dnssec_zones):
             shutil.rmtree(path)
 
 
+
+def _relation_values(value):
+    return [item for item in re.split(r"[\s,]+", value or "") if item]
+
+
+def configured_self_txt_zones():
+    """Return primary zones whose exact TSIG owners may hold runtime TXT data."""
+    root = ET.parse(CONFIG).getroot()
+    key_names = {}
+    for key in root.findall("./OPNsense/bind/tsig/keys/key"):
+        if (key.findtext("enabled") or "1") != "1":
+            continue
+        uuid = (key.get("uuid") or "").lower()
+        name = (key.findtext("name") or "").strip().rstrip(".").lower()
+        if UUID_RE.match(uuid + ".db") and ZONE_RE.fullmatch(name):
+            key_names[uuid] = name
+
+    zones = {}
+    for domain in root.findall("./OPNsense/bind/domain/domains/domain"):
+        if (domain.findtext("enabled") or "1") != "1":
+            continue
+        if (domain.findtext("type") or "").strip() != "primary":
+            continue
+        if (domain.findtext("updatepolicy") or "self_txt").strip() != "self_txt":
+            continue
+        uuid = (domain.get("uuid") or "").lower()
+        zone = (domain.findtext("domainname") or "").strip().rstrip(".").lower()
+        if not UUID_RE.match(uuid + ".db") or not ZONE_RE.fullmatch(zone):
+            continue
+        owners = set()
+        for key_uuid in _relation_values(domain.findtext("updatekeys")):
+            owner = key_names.get(key_uuid.lower())
+            if owner and (owner == zone or owner.endswith("." + zone)):
+                owners.add(owner)
+        if owners:
+            zones[uuid] = {"zone": zone, "owners": sorted(owners)}
+    return zones
+
+
+def _parse_zone_text(text, owners):
+    serial = None
+    records = {owner: set() for owner in owners}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 4)
+        if len(parts) < 5 or parts[2].upper() != "IN":
+            continue
+        owner = parts[0].rstrip(".").lower()
+        rrtype = parts[3].upper()
+        rdata = parts[4].strip()
+        if rrtype == "SOA":
+            fields = rdata.split()
+            if len(fields) >= 3 and fields[2].isdigit():
+                serial = int(fields[2])
+        elif rrtype == "TXT" and owner in records:
+            try:
+                ttl = int(parts[1])
+            except ValueError:
+                ttl = 60
+            records[owner].add((ttl, rdata))
+    return serial, records
+
+
+def _compile_zone(zone, path, with_journal=False):
+    command = [NAMED_COMPILEZONE, "-D", "-F", "text"]
+    if with_journal:
+        command.append("-j")
+    command.extend(["-o", "-", zone, path])
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _replay_journal(path, owners, serial, records):
+    result = subprocess.run([NAMED_JOURNALPRINT, path], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError("unable to read BIND journal %s: %s" % (path, result.stderr.strip()))
+    for raw_line in result.stdout.splitlines():
+        parts = raw_line.strip().split(None, 5)
+        if len(parts) < 5 or parts[0] not in {"add", "del"}:
+            continue
+        action, owner_raw, ttl_raw, dns_class, rrtype = parts[:5]
+        if dns_class.upper() != "IN":
+            continue
+        owner = owner_raw.rstrip(".").lower()
+        rdata = parts[5].strip() if len(parts) == 6 else ""
+        if rrtype.upper() == "SOA" and action == "add":
+            fields = rdata.split()
+            if len(fields) >= 3 and fields[2].isdigit():
+                serial = int(fields[2])
+            continue
+        if rrtype.upper() != "TXT" or owner not in records:
+            continue
+        try:
+            ttl = int(ttl_raw)
+        except ValueError:
+            ttl = 60
+        if action == "add" and rdata:
+            records[owner].add((ttl, rdata))
+        elif action == "del":
+            if rdata:
+                records[owner].discard((ttl, rdata))
+            else:
+                records[owner].clear()
+    return serial, records
+
+
+def _journal_paths(uuid):
+    if not os.path.isdir(PRIMARY_DIR):
+        return []
+    prefix = uuid.lower() + ".db"
+    return sorted(
+        os.path.join(PRIMARY_DIR, name)
+        for name in os.listdir(PRIMARY_DIR)
+        if name.lower().startswith(prefix) and name.lower().endswith(".jnl")
+    )
+
+
+def _current_zone_state(uuid, zone, owners, include_master=False):
+    path = os.path.join(PRIMARY_DIR, uuid + ".db")
+    journals = _journal_paths(uuid)
+    if not journals:
+        if not include_master:
+            return None
+        compiled = _compile_zone(zone, path, with_journal=False)
+        if compiled is None:
+            raise RuntimeError("unable to read BIND primary zone %s" % zone)
+        serial, records = _parse_zone_text(compiled, owners)
+        if not any(records.values()):
+            return None
+        return serial, records
+    compiled = _compile_zone(zone, path, with_journal=True)
+    if compiled is not None:
+        return _parse_zone_text(compiled, owners)
+    compiled = _compile_zone(zone, path, with_journal=False)
+    if compiled is None:
+        raise RuntimeError("unable to read BIND primary zone %s" % zone)
+    serial, records = _parse_zone_text(compiled, owners)
+    for journal in journals:
+        serial, records = _replay_journal(journal, owners, serial, records)
+    return serial, records
+
+
+def _write_snapshot(snapshot):
+    directory = os.path.dirname(RUNTIME_SNAPSHOT) or "."
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    temporary = RUNTIME_SNAPSHOT + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(snapshot, handle, sort_keys=True)
+        handle.write("\n")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, RUNTIME_SNAPSHOT)
+
+
+def snapshot_runtime_txt(include_master=False):
+    """Capture exact self-TXT runtime state before generated zone files change."""
+    zones = configured_self_txt_zones()
+    snapshot = {"version": 1, "zones": {}}
+    journalled = []
+    for uuid, item in zones.items():
+        state = _current_zone_state(
+            uuid, item["zone"], set(item["owners"]), include_master=include_master
+        )
+        if state is None:
+            continue
+        serial, records = state
+        snapshot["zones"][uuid] = {
+            "zone": item["zone"],
+            "serial": serial,
+            "records": [
+                {"owner": owner, "ttl": ttl, "rdata": rdata}
+                for owner in sorted(records)
+                for ttl, rdata in sorted(records[owner])
+                if "\n" not in rdata and "\r" not in rdata
+            ],
+        }
+        journalled.append(uuid)
+    if not journalled:
+        return
+    _write_snapshot(snapshot)
+    for uuid in journalled:
+        for journal in _journal_paths(uuid):
+            os.unlink(journal)
+
+
+def _replace_soa_serial(text, serial):
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if re.search(r"\bIN\s+SOA\b", line, flags=re.IGNORECASE):
+            replaced, count = re.subn(r"(\(\s*)[0-9]+(\s+)", rf"\g<1>{serial}\g<2>", line, count=1)
+            if count:
+                lines[index] = replaced
+                return "".join(lines)
+    raise RuntimeError("unable to locate SOA serial in generated zone file")
+
+
+def _next_serial(serial):
+    return 1 if serial >= 4294967295 else serial + 1
+
+
+def restore_runtime_txt():
+    """Merge captured self-TXT records into freshly rendered primary zone files."""
+    if not os.path.exists(RUNTIME_SNAPSHOT):
+        return
+    with open(RUNTIME_SNAPSHOT, "r", encoding="utf-8") as handle:
+        snapshot = json.load(handle)
+    configured = configured_self_txt_zones()
+    for uuid, item in snapshot.get("zones", {}).items():
+        if not UUID_RE.match(uuid + ".db") or not ZONE_RE.fullmatch(item.get("zone", "")):
+            raise RuntimeError("invalid runtime snapshot zone identity")
+        current = configured.get(uuid)
+        if current is None or current["zone"] != item["zone"]:
+            continue
+        allowed_owners = set(current["owners"])
+        path = os.path.join(PRIMARY_DIR, uuid + ".db")
+        records = [
+            record for record in item.get("records", [])
+            if (record.get("owner") or "").rstrip(".").lower() in allowed_owners
+        ]
+        owners = {record.get("owner", "").rstrip(".").lower() for record in records}
+        compiled = _compile_zone(item["zone"], path, with_journal=False)
+        if compiled is None:
+            raise RuntimeError("unable to validate freshly rendered BIND zone %s" % item["zone"])
+        generated_serial, existing = _parse_zone_text(compiled, owners)
+        snapshot_serial = item.get("serial")
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        if isinstance(snapshot_serial, int) and (
+            generated_serial is None or generated_serial <= snapshot_serial
+        ):
+            text = _replace_soa_serial(text, _next_serial(snapshot_serial))
+        additions = []
+        for record in records:
+            owner = (record.get("owner") or "").rstrip(".").lower()
+            ttl = record.get("ttl")
+            rdata = record.get("rdata") or ""
+            if owner not in owners or not ZONE_RE.fullmatch(owner):
+                raise RuntimeError("invalid runtime TXT owner")
+            if not isinstance(ttl, int) or ttl < 0 or "\n" in rdata or "\r" in rdata:
+                raise RuntimeError("invalid runtime TXT record")
+            if (ttl, rdata) not in existing.get(owner, set()):
+                additions.append(f"{owner}.\t{ttl}\tIN\tTXT\t{rdata}\n")
+        if additions:
+            if text and not text.endswith("\n"):
+                text += "\n"
+            text += "".join(additions)
+        stat = os.stat(path)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(path, stat.st_mode & 0o7777)
+        try:
+            os.chown(path, stat.st_uid, stat.st_gid)
+        except PermissionError:
+            pass
+    os.unlink(RUNTIME_SNAPSHOT)
+
+
 def cleanup():
     primary, secondary, dnssec_zones = configured_domains()
     remove_stale_zone_artifacts(PRIMARY_DIR, primary)
@@ -143,17 +405,25 @@ def main():
 
     if action == "stop":
         status = run_named("stop")
-        cleanup()
+        if status == 0:
+            snapshot_runtime_txt(include_master=True)
+            cleanup()
         return status
     if action == "restart":
-        run_named("stop")
+        status = run_named("stop")
+        if status != 0:
+            return status
+        snapshot_runtime_txt(include_master=True)
         cleanup()
+        restore_runtime_txt()
         return run_named("start")
     if action == "reload":
         cleanup()
         return run_named("reload")
 
     cleanup()
+    snapshot_runtime_txt()
+    restore_runtime_txt()
     return run_named("start")
 
 
