@@ -247,11 +247,19 @@ def _journal_paths(uuid):
     )
 
 
-def _current_zone_state(uuid, zone, owners):
+def _current_zone_state(uuid, zone, owners, include_master=False):
     path = os.path.join(PRIMARY_DIR, uuid + ".db")
     journals = _journal_paths(uuid)
     if not journals:
-        return None
+        if not include_master:
+            return None
+        compiled = _compile_zone(zone, path, with_journal=False)
+        if compiled is None:
+            raise RuntimeError("unable to read BIND primary zone %s" % zone)
+        serial, records = _parse_zone_text(compiled, owners)
+        if not any(records.values()):
+            return None
+        return serial, records
     compiled = _compile_zone(zone, path, with_journal=True)
     if compiled is not None:
         return _parse_zone_text(compiled, owners)
@@ -275,13 +283,15 @@ def _write_snapshot(snapshot):
     os.replace(temporary, RUNTIME_SNAPSHOT)
 
 
-def snapshot_runtime_txt():
+def snapshot_runtime_txt(include_master=False):
     """Capture exact self-TXT runtime state before generated zone files change."""
     zones = configured_self_txt_zones()
     snapshot = {"version": 1, "zones": {}}
     journalled = []
     for uuid, item in zones.items():
-        state = _current_zone_state(uuid, item["zone"], set(item["owners"]))
+        state = _current_zone_state(
+            uuid, item["zone"], set(item["owners"]), include_master=include_master
+        )
         if state is None:
             continue
         serial, records = state
@@ -396,14 +406,14 @@ def main():
     if action == "stop":
         status = run_named("stop")
         if status == 0:
-            snapshot_runtime_txt()
+            snapshot_runtime_txt(include_master=True)
             cleanup()
         return status
     if action == "restart":
         status = run_named("stop")
         if status != 0:
             return status
-        snapshot_runtime_txt()
+        snapshot_runtime_txt(include_master=True)
         cleanup()
         restore_runtime_txt()
         return run_named("start")

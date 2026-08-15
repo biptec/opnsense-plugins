@@ -157,6 +157,16 @@ class DynamicRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["zones"][self.zone_uuid]["records"][0]["owner"], self.owner)
         self.assertEqual(payload["zones"][self.zone_uuid]["records"][0]["rdata"], '"token"')
 
+    def test_master_only_runtime_txt_is_captured_for_reconfigure_stop(self):
+        canonical = (
+            "acme.example.net. 12 IN SOA ns.example.net. hostmaster.example.net. 12 60 60 3600 60\n"
+            f'{self.owner}. 60 IN TXT "active"\n'
+        )
+        with mock.patch.object(bind_service, "_compile_zone", return_value=canonical):
+            bind_service.snapshot_runtime_txt(include_master=True)
+        payload = json.loads(self.snapshot.read_text(encoding="utf-8"))
+        self.assertEqual(payload["zones"][self.zone_uuid]["records"][0]["rdata"], '"active"')
+
     def test_snapshot_without_journal_keeps_pending_restore(self):
         self.snapshot.write_text('{"version": 1, "zones": {}}\n', encoding="utf-8")
         bind_service.snapshot_runtime_txt()
@@ -216,8 +226,8 @@ class ServiceActionTests(unittest.TestCase):
         def fake_cleanup():
             calls.append(("cleanup", None))
 
-        def fake_snapshot():
-            calls.append(("snapshot", None))
+        def fake_snapshot(*args, **kwargs):
+            calls.append(("snapshot", kwargs.get("include_master", False)))
 
         def fake_restore():
             calls.append(("restore", None))
@@ -244,7 +254,7 @@ class ServiceActionTests(unittest.TestCase):
             calls,
             [
                 ("named", "stop"),
-                ("snapshot", None),
+                ("snapshot", True),
                 ("cleanup", None),
                 ("restore", None),
                 ("named", "start"),
