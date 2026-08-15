@@ -10,6 +10,8 @@ class ServiceControllerContractTests(unittest.TestCase):
         actions = (ROOT / "src/opnsense/service/conf/actions.d/actions_acmeclient.conf").read_text()
         self.assertIn('configdRun("acmeclient http-configtest")', controller)
         self.assertIn("[http-configtest]", actions)
+        self.assertIn("/usr/local/etc/rc.d/acme_http_challenge oneconfigtest 2>&1 || exit 0", actions)
+        self.assertNotIn("/usr/local/etc/rc.d/acme_http_challenge configtest 2>&1 || exit 0", actions)
         self.assertNotIn('configdRun("acmeclient configtest")', controller)
 
 
