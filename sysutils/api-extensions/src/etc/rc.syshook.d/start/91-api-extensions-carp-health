@@ -1,0 +1,2 @@
+#!/bin/sh
+/usr/local/opnsense/scripts/OPNsense/ApiExtensions/carp_health_control.sh start

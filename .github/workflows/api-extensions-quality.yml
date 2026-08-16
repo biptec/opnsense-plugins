@@ -45,5 +45,8 @@ jobs:
       - name: Run validation tests
         run: php sysutils/api-extensions/tests/test_validation.php
 
+      - name: Run CARP health tests
+        run: python3 -m unittest sysutils/api-extensions/tests/test_carp_health.py
+
       - name: Check whitespace
         run: git diff --check
