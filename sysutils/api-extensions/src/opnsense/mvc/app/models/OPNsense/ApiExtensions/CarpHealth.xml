@@ -1,0 +1,61 @@
+<model>
+    <mount>//OPNsense/ApiExtensions/CarpHealth</mount>
+    <description>CARP L2 health monitoring</description>
+    <version>1.0.0</version>
+    <items>
+        <enabled type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </enabled>
+        <interval type="IntegerField">
+            <Default>1</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>60</MaximumValue>
+            <Required>Y</Required>
+        </interval>
+        <failure_threshold type="IntegerField">
+            <Default>2</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>20</MaximumValue>
+            <Required>Y</Required>
+        </failure_threshold>
+        <recovery_threshold type="IntegerField">
+            <Default>2</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>20</MaximumValue>
+            <Required>Y</Required>
+        </recovery_threshold>
+        <checks>
+            <check type="ArrayField">
+                <enabled type="BooleanField">
+                    <Default>1</Default>
+                    <Required>Y</Required>
+                </enabled>
+                <name type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^[0-9A-Za-z._-]{1,64}$/</Mask>
+                    <ValidationMessage>Use 1-64 letters, numbers, dots, underscores or dashes.</ValidationMessage>
+                    <Constraints>
+                        <check001>
+                            <type>UniqueConstraint</type>
+                            <ValidationMessage>Health check names must be unique.</ValidationMessage>
+                        </check001>
+                    </Constraints>
+                </name>
+                <interface type="InterfaceField">
+                    <Required>Y</Required>
+                    <AllowDynamic>Y</AllowDynamic>
+                    <filters>
+                        <enable>/^(?!0).*$/</enable>
+                    </filters>
+                </interface>
+                <target type="NetworkField">
+                    <Required>Y</Required>
+                    <AddressFamily>ipv4</AddressFamily>
+                    <NetMaskAllowed>N</NetMaskAllowed>
+                    <ValidationMessage>Specify an IPv4 address reachable on this L2 segment.</ValidationMessage>
+                </target>
+            </check>
+        </checks>
+    </items>
+</model>
