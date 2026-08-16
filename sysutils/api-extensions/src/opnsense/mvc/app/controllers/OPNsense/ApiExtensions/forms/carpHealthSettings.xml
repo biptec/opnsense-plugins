@@ -1,0 +1,26 @@
+<form>
+    <field>
+        <id>carp_health.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <help>Enable CARP L2 health monitoring. When enabled, CARP remains demoted until the configured checks satisfy the recovery threshold.</help>
+    </field>
+    <field>
+        <id>carp_health.interval</id>
+        <label>Probe interval</label>
+        <type>text</type>
+        <help>Seconds between ARP probes. Allowed range: 1-60 seconds.</help>
+    </field>
+    <field>
+        <id>carp_health.failure_threshold</id>
+        <label>Failure threshold</label>
+        <type>text</type>
+        <help>Consecutive failed probes required before this node globally demotes its CARP VHIDs.</help>
+    </field>
+    <field>
+        <id>carp_health.recovery_threshold</id>
+        <label>Recovery threshold</label>
+        <type>text</type>
+        <help>Consecutive successful probes required before the CARP demotion is removed.</help>
+    </field>
+</form>

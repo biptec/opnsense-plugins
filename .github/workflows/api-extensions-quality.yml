@@ -48,5 +48,8 @@ jobs:
       - name: Run CARP health tests
         run: python3 -m unittest sysutils/api-extensions/tests/test_carp_health.py
 
+      - name: Run CARP health WebGUI tests
+        run: python3 -m unittest sysutils/api-extensions/tests/test_webgui.py
+
       - name: Check whitespace
         run: git diff --check

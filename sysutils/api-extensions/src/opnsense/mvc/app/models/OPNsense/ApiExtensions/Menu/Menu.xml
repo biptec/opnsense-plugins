@@ -1,0 +1,5 @@
+<menu>
+    <Services>
+        <CarpHealth VisibleName="CARP Health" cssClass="fa fa-heartbeat fa-fw" url="/ui/api_extensions/carp_health" />
+    </Services>
+</menu>
