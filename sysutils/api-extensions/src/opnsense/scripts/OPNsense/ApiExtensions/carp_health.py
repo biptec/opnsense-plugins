@@ -3,6 +3,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -14,6 +15,8 @@ CONFIG_PATH = "/conf/config.xml"
 STATE_PATH = "/var/run/api_extensions_carp_health.json"
 ARPING = "/usr/local/sbin/arping"
 CONFIGCTL = "/usr/local/sbin/configctl"
+IFCONFIG = "/sbin/ifconfig"
+FAILOVER_ADV_SKEW = 254
 
 
 def as_bool(value, default=False):
@@ -37,6 +40,16 @@ class Check:
     interface: str
     device: str
     target: str
+    scope: str
+    vhid: int
+
+
+@dataclass(frozen=True)
+class CarpVhid:
+    interface: str
+    device: str
+    vhid: int
+    advskew: int
 
 
 @dataclass(frozen=True)
@@ -46,6 +59,7 @@ class Config:
     failure_threshold: int
     recovery_threshold: int
     checks: tuple
+    carp_vhids: tuple
     signature: str
 
 
@@ -54,7 +68,7 @@ def load_config(path=CONFIG_PATH):
     root = tree.getroot()
     node = root.find("./OPNsense/ApiExtensions/CarpHealth")
     if node is None:
-        return Config(False, 1, 2, 2, tuple(), "disabled")
+        return Config(False, 1, 2, 2, tuple(), tuple(), "disabled")
 
     enabled = as_bool(node.findtext("enabled"))
     interval = as_int(node.findtext("interval"), 1, 1, 60)
@@ -67,6 +81,21 @@ def load_config(path=CONFIG_PATH):
         for item in list(interfaces):
             interface_map[item.tag] = (item.findtext("if") or "").strip()
 
+    carp_vhids = []
+    for vip in root.findall("./virtualip/vip"):
+        if (vip.findtext("mode") or "").strip().lower() != "carp":
+            continue
+        interface = (vip.findtext("interface") or "").strip()
+        vhid = as_int(vip.findtext("vhid"), 0, 0, 255)
+        if vhid == 0:
+            continue
+        carp_vhids.append(CarpVhid(
+            interface=interface,
+            device=interface_map.get(interface, ""),
+            vhid=vhid,
+            advskew=as_int(vip.findtext("advskew"), 0, 0, 254),
+        ))
+
     checks = []
     for item in node.findall("./checks/check"):
         if not as_bool(item.findtext("enabled"), True):
@@ -75,11 +104,23 @@ def load_config(path=CONFIG_PATH):
         friendly = (item.findtext("interface") or "").strip()
         target = (item.findtext("target") or "").strip()
         uuid = item.attrib.get("uuid", "") or name
+        scope = (item.findtext("scope") or "global").strip().lower()
+        if scope not in {"global", "vhid"}:
+            scope = "global"
+        vhid = as_int(item.findtext("vhid"), 0, 0, 255) if scope == "vhid" else 0
         try:
             target = str(ipaddress.IPv4Address(target))
         except ipaddress.AddressValueError:
             target = ""
-        checks.append(Check(uuid, name, friendly, interface_map.get(friendly, ""), target))
+        checks.append(Check(
+            uuid=uuid,
+            name=name,
+            interface=friendly,
+            device=interface_map.get(friendly, ""),
+            target=target,
+            scope=scope,
+            vhid=vhid,
+        ))
 
     canonical = {
         "enabled": enabled,
@@ -87,9 +128,10 @@ def load_config(path=CONFIG_PATH):
         "failure_threshold": failure,
         "recovery_threshold": recovery,
         "checks": [check.__dict__ for check in checks],
+        "carp_vhids": [carp.__dict__ for carp in carp_vhids],
     }
     signature = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
-    return Config(enabled, interval, failure, recovery, tuple(checks), signature)
+    return Config(enabled, interval, failure, recovery, tuple(checks), tuple(carp_vhids), signature)
 
 
 def probe(check, arping=ARPING):
@@ -153,29 +195,266 @@ class HealthTracker:
         return ready, healthy
 
 
-def build_state(config, tracker, ready, healthy, now=None):
+def _health_for_checks(checks, tracker):
+    if not checks:
+        return True, True
+    values = [tracker.records.get(check.uuid, {}).get("healthy") for check in checks]
+    ready = all(value is not None for value in values)
+    healthy = ready and all(value is True for value in values)
+    return ready, healthy
+
+
+def scope_health(config, tracker):
+    global_checks = [check for check in config.checks if check.scope == "global"]
+    global_ready, global_healthy = _health_for_checks(global_checks, tracker)
+    global_active = config.enabled and bool(global_checks)
+    global_state = {
+        "active": global_active,
+        "check_count": len(global_checks),
+        "ready": global_ready if global_active else True,
+        "healthy": global_healthy if global_active else True,
+    }
+
+    groups = {}
+    for check in config.checks:
+        if check.scope != "vhid":
+            continue
+        key = f"{check.interface}:{check.vhid}"
+        groups.setdefault(key, []).append(check)
+
+    vhid_states = {}
+    for key, checks in groups.items():
+        ready, healthy = _health_for_checks(checks, tracker)
+        if not config.enabled:
+            ready, healthy = True, True
+        vhid_states[key] = {
+            "interface": checks[0].interface,
+            "vhid": checks[0].vhid,
+            "checks": [check.name for check in checks],
+            "ready": ready,
+            "healthy": healthy,
+            "desired_demoted": config.enabled and not healthy,
+        }
+    return global_state, vhid_states
+
+
+def find_carp_vhid(config, interface, vhid):
+    matches = [
+        carp for carp in config.carp_vhids
+        if carp.interface == interface and carp.vhid == int(vhid)
+    ]
+    return matches[0] if matches else None
+
+
+def run_command(args, capture=False):
+    try:
+        result = subprocess.run(
+            args,
+            stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return result.returncode, result.stdout or ""
+    except (OSError, subprocess.TimeoutExpired):
+        return 1, ""
+
+
+def read_carp_runtime(carp, command_func=run_command):
+    if not carp.device:
+        return None
+    returncode, output = command_func([IFCONFIG, carp.device], capture=True)
+    if returncode != 0:
+        return None
+    pattern = re.compile(
+        r"carp:\s+(MASTER|BACKUP|INIT)\s+vhid\s+(\d+)\s+advbase\s+\d+\s+advskew\s+(\d+)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(output):
+        if int(match.group(2)) == carp.vhid:
+            return {
+                "state": match.group(1).upper(),
+                "advskew": int(match.group(3)),
+            }
+    return None
+
+
+def set_vhid_priority(carp, demoted, command_func=run_command):
+    advskew = FAILOVER_ADV_SKEW if demoted else carp.advskew
+    command = [IFCONFIG, carp.device, "vhid", str(carp.vhid), "advskew", str(advskew)]
+    if demoted:
+        command.extend(["state", "BACKUP"])
+    return command_func(command, capture=False)[0] == 0
+
+
+def _carp_from_state(item):
+    try:
+        return CarpVhid(
+            interface=str(item["interface"]),
+            device=str(item["device"]),
+            vhid=int(item["vhid"]),
+            advskew=int(item["configured_advskew"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def reconcile_vhid_scopes(config, tracker, previous_state=None, command_func=run_command):
+    _, desired = scope_health(config, tracker)
+    previous = previous_state if isinstance(previous_state, dict) else {}
+    previous_items = previous.get("vhids", []) if isinstance(previous.get("vhids", []), list) else []
+    current_keys = set(desired)
+    result = []
+
+    for item in previous_items:
+        key = item.get("key")
+        if not key or key in current_keys:
+            continue
+        carp = _carp_from_state(item)
+        if carp is None or not carp.device:
+            continue
+        runtime = read_carp_runtime(carp, command_func)
+        if runtime is None:
+            continue
+        if runtime["advskew"] != carp.advskew:
+            set_vhid_priority(carp, False, command_func)
+            runtime = read_carp_runtime(carp, command_func)
+        if runtime is not None and runtime["advskew"] != carp.advskew:
+            result.append({
+                "key": key,
+                "interface": carp.interface,
+                "device": carp.device,
+                "vhid": carp.vhid,
+                "checks": [],
+                "ready": True,
+                "healthy": True,
+                "desired_demoted": False,
+                "configured_advskew": carp.advskew,
+                "current_advskew": runtime["advskew"],
+                "carp_state": runtime["state"],
+                "control_ok": False,
+                "retired": True,
+                "error": "Failed to restore previous VHID priority",
+            })
+
+    for key, group in desired.items():
+        carp = find_carp_vhid(config, group["interface"], group["vhid"])
+        if carp is None:
+            result.append({
+                "key": key,
+                "interface": group["interface"],
+                "device": "",
+                "vhid": group["vhid"],
+                "checks": group["checks"],
+                "ready": group["ready"],
+                "healthy": group["healthy"],
+                "desired_demoted": group["desired_demoted"],
+                "configured_advskew": None,
+                "current_advskew": None,
+                "carp_state": "MISSING",
+                "control_ok": False,
+                "retired": False,
+                "error": "CARP VHID not found on selected interface",
+            })
+            continue
+
+        runtime = read_carp_runtime(carp, command_func)
+        control_ok = runtime is not None
+        if runtime is not None:
+            if group["desired_demoted"]:
+                needs_change = runtime["advskew"] != FAILOVER_ADV_SKEW or runtime["state"] != "BACKUP"
+            else:
+                needs_change = runtime["advskew"] != carp.advskew
+            if needs_change:
+                control_ok = set_vhid_priority(carp, group["desired_demoted"], command_func)
+                runtime = read_carp_runtime(carp, command_func) if control_ok else runtime
+
+        if runtime is None:
+            control_ok = False
+        elif group["desired_demoted"]:
+            control_ok = control_ok and runtime["advskew"] == FAILOVER_ADV_SKEW and runtime["state"] == "BACKUP"
+        else:
+            control_ok = control_ok and runtime["advskew"] == carp.advskew
+
+        result.append({
+            "key": key,
+            "interface": carp.interface,
+            "device": carp.device,
+            "vhid": carp.vhid,
+            "checks": group["checks"],
+            "ready": group["ready"],
+            "healthy": group["healthy"],
+            "desired_demoted": group["desired_demoted"],
+            "configured_advskew": carp.advskew,
+            "current_advskew": runtime["advskew"] if runtime is not None else None,
+            "carp_state": runtime["state"] if runtime is not None else "UNKNOWN",
+            "control_ok": control_ok,
+            "retired": False,
+            "error": "" if control_ok else "Unable to enforce CARP VHID state",
+        })
+    return result
+
+
+def reset_vhid_overrides(state, command_func=run_command):
+    if not isinstance(state, dict):
+        return True
+    success = True
+    for item in state.get("vhids", []):
+        carp = _carp_from_state(item)
+        if carp is None or not carp.device:
+            continue
+        runtime = read_carp_runtime(carp, command_func)
+        if runtime is None:
+            continue
+        if runtime["advskew"] != carp.advskew:
+            success = set_vhid_priority(carp, False, command_func) and success
+    return success
+
+
+def build_state(config, tracker, ready, healthy, vhids=None, now=None):
     now = time.time() if now is None else now
+    vhids = [] if vhids is None else vhids
+    global_state, _ = scope_health(config, tracker)
+    vhid_by_key = {item.get("key"): item for item in vhids if not item.get("retired")}
     checks = []
     by_uuid = {check.uuid: check for check in config.checks}
     for uuid, record in tracker.records.items():
         check = by_uuid.get(uuid)
         if check is None:
             continue
-        checks.append({
+        row = {
             "uuid": uuid,
             "name": check.name,
             "interface": check.interface,
             "device": check.device,
             "target": check.target,
+            "scope": check.scope,
+            "vhid": check.vhid,
             **record,
-        })
+        }
+        if check.scope == "vhid":
+            runtime = vhid_by_key.get(f"{check.interface}:{check.vhid}", {})
+            row.update({
+                "carp_state": runtime.get("carp_state", "UNKNOWN"),
+                "configured_advskew": runtime.get("configured_advskew"),
+                "current_advskew": runtime.get("current_advskew"),
+                "control_ok": runtime.get("control_ok", False),
+            })
+        checks.append(row)
+    control_ok = all(item.get("control_ok", False) for item in vhids)
+    effective_healthy = healthy and control_ok
     return {
         "status": "ok",
         "enabled": config.enabled,
         "ready": ready,
-        "healthy": healthy,
+        "healthy": effective_healthy,
+        "probe_healthy": healthy,
+        "control_ok": control_ok,
         "timestamp": now,
         "config_signature": config.signature,
+        "global": global_state,
+        "vhids": vhids,
         "checks": checks,
     }
 
@@ -219,14 +498,25 @@ def status_state(config, state, running, now=None):
         result = dict(state)
         result["running"] = running
         return result
+    global_checks = [check for check in config.checks if check.scope == "global"]
+    global_active = config.enabled and bool(global_checks)
     return {
         "status": "ok",
         "enabled": config.enabled,
         "ready": not config.enabled,
         "healthy": not config.enabled,
+        "probe_healthy": not config.enabled,
+        "control_ok": not config.enabled,
         "running": running,
         "timestamp": 0,
         "config_signature": config.signature,
+        "global": {
+            "active": global_active,
+            "check_count": len(global_checks),
+            "ready": not global_active,
+            "healthy": not global_active,
+        },
+        "vhids": [],
         "checks": [],
     }
 
@@ -234,15 +524,18 @@ def status_state(config, state, running, now=None):
 def checker_exit_code(config, state, now=None):
     if not config.enabled:
         return 0
-    if state is None:
-        return 1
-    if state.get("config_signature") != config.signature:
+    if not any(check.scope == "global" for check in config.checks):
+        return 0
+    if state is None or state.get("config_signature") != config.signature:
         return 1
     if not state_is_current(config, state, now):
         return 1
-    if not state.get("ready", False):
-        return 0
-    return 0 if state.get("healthy", False) else 1
+    global_state = state.get("global")
+    if not isinstance(global_state, dict):
+        return 1
+    if not global_state.get("ready", False):
+        return 1
+    return 0 if global_state.get("healthy", False) else 1
 
 
 def trigger_carp_service_status(configctl=CONFIGCTL):

@@ -28,13 +28,20 @@ class CarpHealthWebGuiTests(unittest.TestCase):
 
         check = ET.parse(MVC / "controllers/OPNsense/ApiExtensions/forms/carpHealthCheck.xml").getroot()
         check_ids = {node.text for node in check.findall("./field/id")}
-        self.assertEqual(check_ids, {"check.enabled", "check.name", "check.interface", "check.target"})
+        self.assertEqual(check_ids, {
+            "check.enabled", "check.name", "check.interface", "check.target",
+            "check.scope", "check.vhid",
+        })
 
     def test_view_uses_first_class_carp_health_api(self):
         view = (MVC / "views/OPNsense/ApiExtensions/carp_health.volt").read_text()
         for endpoint in ("/get", "/set", "/searchCheck", "/getCheck/", "/setCheck/", "/addCheck", "/delCheck/", "/reconfigure", "/status"):
             self.assertIn(endpoint, view)
-        for field in ("status-enabled", "status-running", "status-ready", "status-healthy", "runtime-checks"):
+        for field in (
+            "status-enabled", "status-running", "status-ready", "status-healthy",
+            "status-control", "runtime-checks", "CARP Scope", "CARP State",
+            "Configured advskew", "Current advskew",
+        ):
             self.assertIn(field, view)
         self.assertIn("Apply Changes", view)
 

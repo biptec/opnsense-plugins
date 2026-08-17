@@ -23,4 +23,16 @@
         <type>text</type>
         <help>IPv4 address to probe with ARP on the selected interface. The probe does not consume a node-specific IPv4 address.</help>
     </field>
+    <field>
+        <id>check.scope</id>
+        <label>CARP scope</label>
+        <type>dropdown</type>
+        <help>Global uses native CARP demotion. Specific VHID changes only that VHID on the selected interface.</help>
+    </field>
+    <field>
+        <id>check.vhid</id>
+        <label>VHID</label>
+        <type>text</type>
+        <help>Required for Specific VHID scope (1-255). Ignored for Global scope.</help>
+    </field>
 </form>
