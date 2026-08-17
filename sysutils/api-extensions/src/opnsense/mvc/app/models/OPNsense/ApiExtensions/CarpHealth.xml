@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/ApiExtensions/CarpHealth</mount>
     <description>CARP L2 health monitoring</description>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <items>
         <enabled type="BooleanField">
             <Default>0</Default>
@@ -55,6 +55,20 @@
                     <NetMaskAllowed>N</NetMaskAllowed>
                     <ValidationMessage>Specify an IPv4 address reachable on this L2 segment.</ValidationMessage>
                 </target>
+                <scope type="OptionField">
+                    <Default>global</Default>
+                    <Required>Y</Required>
+                    <OptionValues>
+                        <global>Global CARP demotion</global>
+                        <vhid>Specific VHID</vhid>
+                    </OptionValues>
+                </scope>
+                <vhid type="IntegerField">
+                    <Default>0</Default>
+                    <MinimumValue>0</MinimumValue>
+                    <MaximumValue>255</MaximumValue>
+                    <Required>Y</Required>
+                </vhid>
             </check>
         </checks>
     </items>

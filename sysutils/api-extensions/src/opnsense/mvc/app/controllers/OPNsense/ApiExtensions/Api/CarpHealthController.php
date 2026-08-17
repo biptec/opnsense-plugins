@@ -12,7 +12,10 @@ class CarpHealthController extends ApiMutableModelControllerBase
 
     public function searchCheckAction()
     {
-        return $this->searchBase('checks.check', ['enabled', 'name', 'interface', 'target']);
+        return $this->searchBase(
+            'checks.check',
+            ['enabled', 'name', 'interface', 'target', 'scope', 'vhid']
+        );
     }
 
     public function getCheckAction($uuid = null)
@@ -45,7 +48,10 @@ class CarpHealthController extends ApiMutableModelControllerBase
         if ($result === 'ok') {
             $backend->configdRun('interface update carp service_status');
         }
-        return ['status' => $result === 'ok' ? 'ok' : 'failed', 'result' => $result];
+        return [
+            'status' => $result === 'ok' ? 'ok' : 'failed',
+            'result' => $result,
+        ];
     }
 
     public function statusAction(): array
@@ -55,6 +61,9 @@ class CarpHealthController extends ApiMutableModelControllerBase
         }
         $result = trim((new Backend())->configdRun('api_extensions carp_health_status'));
         $decoded = json_decode($result, true);
-        return is_array($decoded) ? $decoded : ['status' => 'failed', 'result' => $result];
+        return is_array($decoded) ? $decoded : [
+            'status' => 'failed',
+            'result' => $result,
+        ];
     }
 }

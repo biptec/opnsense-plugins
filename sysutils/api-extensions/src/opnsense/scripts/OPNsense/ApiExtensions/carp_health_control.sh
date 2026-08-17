@@ -9,11 +9,17 @@ is_running()
     kill -0 "$(cat "${SUPERVISOR_PID}")" 2>/dev/null
 }
 
+initialize_health()
+{
+    /usr/local/bin/python3 "${SCRIPT}" --initialize >/dev/null 2>&1 || true
+}
+
 start_monitor()
 {
     if is_running; then
         return 0
     fi
+    initialize_health
     rm -f "${SUPERVISOR_PID}" "${CHILD_PID}"
     /usr/sbin/daemon -c -r -P "${SUPERVISOR_PID}" -p "${CHILD_PID}" \
         -T api_extensions_carp_health -S \
@@ -33,9 +39,14 @@ stop_monitor()
     rm -f "${SUPERVISOR_PID}" "${CHILD_PID}"
 }
 
+reset_vhids()
+{
+    /usr/local/bin/python3 "${SCRIPT}" --reset-vhids >/dev/null 2>&1 || true
+}
+
 case "$1" in
     start) start_monitor ;;
-    stop) stop_monitor ;;
+    stop) stop_monitor; reset_vhids ;;
     restart) stop_monitor; start_monitor ;;
     *) echo "usage: $0 {start|stop|restart}" >&2; exit 64 ;;
 esac

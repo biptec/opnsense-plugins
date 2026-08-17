@@ -20,6 +20,7 @@ $(document).ready(function() {
                 setBadge('status-running', 'Unknown', 'warning');
                 setBadge('status-ready', 'Unknown', 'warning');
                 setBadge('status-healthy', 'Unknown', 'warning');
+                setBadge('status-control', 'Unknown', 'warning');
                 showMessage('danger', '{{ lang._("Unable to read CARP health runtime status.") }}');
                 return;
             }
@@ -29,10 +30,13 @@ $(document).ready(function() {
             setBadge('status-ready', data.ready ? 'Ready' : 'Initializing', data.ready ? 'success' : 'warning');
             if (!data.enabled) {
                 setBadge('status-healthy', 'Disabled', 'default');
+                setBadge('status-control', 'Disabled', 'default');
             } else if (!data.ready) {
                 setBadge('status-healthy', 'Unknown', 'warning');
+                setBadge('status-control', data.control_ok ? 'Applied' : 'Pending', data.control_ok ? 'success' : 'warning');
             } else {
                 setBadge('status-healthy', data.healthy ? 'Healthy' : 'Degraded', data.healthy ? 'success' : 'danger');
+                setBadge('status-control', data.control_ok ? 'Applied' : 'Error', data.control_ok ? 'success' : 'danger');
             }
 
             $('#status-signature').text(data.config_signature || '-');
@@ -41,7 +45,7 @@ $(document).ready(function() {
             const tbody = $('#runtime-checks tbody').empty();
             const checks = Array.isArray(data.checks) ? data.checks : [];
             if (checks.length === 0) {
-                $('<tr>').append($('<td>').attr('colspan', 7).addClass('text-muted')
+                $('<tr>').append($('<td>').attr('colspan', 12).addClass('text-muted')
                     .text('{{ lang._("No runtime health checks are active.") }}')).appendTo(tbody);
                 return;
             }
@@ -51,6 +55,11 @@ $(document).ready(function() {
                 $('<td>').text(check.interface || '').appendTo(row);
                 $('<td>').text(check.device || '').appendTo(row);
                 $('<td>').text(check.target || '').appendTo(row);
+                $('<td>').text(check.scope === 'vhid' ? 'VHID' : 'Global').appendTo(row);
+                $('<td>').text(check.scope === 'vhid' ? (check.vhid || '-') : '-').appendTo(row);
+                $('<td>').text(check.carp_state || '-').appendTo(row);
+                $('<td>').text(check.configured_advskew === null || check.configured_advskew === undefined ? '-' : check.configured_advskew).appendTo(row);
+                $('<td>').text(check.current_advskew === null || check.current_advskew === undefined ? '-' : check.current_advskew).appendTo(row);
                 $('<td>').append($('<span>').addClass('label ' + (check.healthy ? 'label-success' : 'label-danger'))
                     .text(check.healthy ? 'Healthy' : 'Failed')).appendTo(row);
                 $('<td>').text(check.failures === undefined ? 0 : check.failures).appendTo(row);
@@ -130,7 +139,7 @@ $(document).ready(function() {
             {{ partial('layout_partials/base_form', ['fields': settingsForm, 'id': 'frm_carp_health_settings', 'apply_btn_id': 'btn_save_carp_health']) }}
         </div>
         <div class="alert alert-info">
-            {{ lang._('CARP health monitoring is fail-closed: when enabled after boot or a configuration change, this node remains globally demoted until every enabled check satisfies the recovery threshold.') }}
+            {{ lang._('CARP health monitoring is fail-closed. Global checks use native CARP demotion; VHID-scoped checks only lower the selected VHID on the selected interface until that scope satisfies the recovery threshold.') }}
         </div>
     </div>
 
@@ -145,6 +154,8 @@ $(document).ready(function() {
                     <th data-column-id="name" data-type="string">{{ lang._('Name') }}</th>
                     <th data-column-id="interface" data-type="string">{{ lang._('Interface') }}</th>
                     <th data-column-id="target" data-type="string">{{ lang._('IPv4 Target') }}</th>
+                    <th data-column-id="scope" data-type="string">{{ lang._('CARP Scope') }}</th>
+                    <th data-column-id="vhid" data-type="numeric">{{ lang._('VHID') }}</th>
                     <th data-column-id="commands" data-width="100" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
                     <th data-column-id="uuid" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
                 </tr>
@@ -170,6 +181,7 @@ $(document).ready(function() {
             <div class="row"><div class="col-sm-3"><strong>{{ lang._('Monitor process') }}</strong></div><div class="col-sm-9"><span id="status-running" class="label label-default">Unknown</span></div></div>
             <div class="row"><div class="col-sm-3"><strong>{{ lang._('Configuration state') }}</strong></div><div class="col-sm-9"><span id="status-ready" class="label label-default">Unknown</span></div></div>
             <div class="row"><div class="col-sm-3"><strong>{{ lang._('Overall health') }}</strong></div><div class="col-sm-9"><span id="status-healthy" class="label label-default">Unknown</span></div></div>
+            <div class="row"><div class="col-sm-3"><strong>{{ lang._('CARP control') }}</strong></div><div class="col-sm-9"><span id="status-control" class="label label-default">Unknown</span></div></div>
             <div class="row"><div class="col-sm-3"><strong>{{ lang._('Configuration signature') }}</strong></div><div class="col-sm-9"><code id="status-signature">-</code></div></div>
             <div class="row"><div class="col-sm-3"><strong>{{ lang._('Last probe update') }}</strong></div><div class="col-sm-9"><span id="status-timestamp">-</span></div></div>
         </div>
@@ -177,6 +189,8 @@ $(document).ready(function() {
         <table id="runtime-checks" class="table table-condensed table-hover table-striped table-responsive">
             <thead><tr>
                 <th>{{ lang._('Name') }}</th><th>{{ lang._('Interface') }}</th><th>{{ lang._('Device') }}</th><th>{{ lang._('Target') }}</th>
+                <th>{{ lang._('Scope') }}</th><th>{{ lang._('VHID') }}</th><th>{{ lang._('CARP State') }}</th>
+                <th>{{ lang._('Configured advskew') }}</th><th>{{ lang._('Current advskew') }}</th>
                 <th>{{ lang._('Health') }}</th><th>{{ lang._('Failures') }}</th><th>{{ lang._('Successes') }}</th>
             </tr></thead>
             <tbody></tbody>
