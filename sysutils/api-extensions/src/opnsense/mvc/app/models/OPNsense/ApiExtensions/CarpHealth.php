@@ -14,13 +14,43 @@ class CarpHealth extends BaseModel
             if (!$validateFullModel && !$check->isFieldChanged()) {
                 continue;
             }
-            if ($check->scope->getValue() === 'vhid') {
+            $scope = $check->scope->getValue();
+            if ($scope === 'vhid') {
                 $vhid = (int)$check->vhid->getValue();
                 if ($vhid < 1 || $vhid > 255) {
-                    $messages->appendMessage(new Message(
-                        gettext('VHID must be between 1 and 255 when scope is Specific VHID.'),
-                        $check->__reference . '.vhid'
-                    ));
+                    $messages->appendMessage(new Message(gettext('VHID must be between 1 and 255 when scope is Specific VHID.'), $check->__reference . '.vhid'));
+                }
+            } elseif ($scope === 'vhid_group') {
+                $targetsValue = $check->vhid_targets->getValue();
+                $targets = is_array($targetsValue)
+                    ? array_filter(array_map('trim', $targetsValue))
+                    : array_filter(array_map('trim', explode(',', (string)$targetsValue)));
+                if (count($targets) === 0) {
+                    $messages->appendMessage(new Message(gettext('At least one interface:VHID target is required for VHID target group scope.'), $check->__reference . '.vhid_targets'));
+                }
+                foreach ($targets as $target) {
+                    if (!preg_match('/^[0-9A-Za-z._-]+:([0-9]{1,3})$/', $target, $matches) || (int)$matches[1] < 1 || (int)$matches[1] > 255) {
+                        $messages->appendMessage(new Message(gettext('VHID targets must use interface:VHID with VHID between 1 and 255.'), $check->__reference . '.vhid_targets'));
+                        break;
+                    }
+                }
+            }
+            foreach ([
+                ['fallback_ipv4_target', 'fallback_ipv4_gateway', FILTER_FLAG_IPV4, 'IPv4'],
+                ['fallback_ipv6_target', 'fallback_ipv6_gateway', FILTER_FLAG_IPV6, 'IPv6'],
+            ] as $route) {
+                [$targetField, $gatewayField, $flag, $label] = $route;
+                $target = trim((string)$check->{$targetField}->getValue());
+                $gateway = trim((string)$check->{$gatewayField}->getValue());
+                if (($target === '') !== ($gateway === '')) {
+                    $messages->appendMessage(new Message(sprintf(gettext('%s fallback target and gateway must be configured together.'), $label), $check->__reference . '.' . $targetField));
+                    continue;
+                }
+                if ($target !== '' && filter_var($target, FILTER_VALIDATE_IP, $flag) === false) {
+                    $messages->appendMessage(new Message(sprintf(gettext('%s fallback target is not a valid address.'), $label), $check->__reference . '.' . $targetField));
+                }
+                if ($gateway !== '' && filter_var($gateway, FILTER_VALIDATE_IP, $flag) === false) {
+                    $messages->appendMessage(new Message(sprintf(gettext('%s fallback gateway is not a valid address.'), $label), $check->__reference . '.' . $gatewayField));
                 }
             }
         }

@@ -16,6 +16,7 @@ STATE_PATH = "/var/run/api_extensions_carp_health.json"
 ARPING = "/usr/local/sbin/arping"
 CONFIGCTL = "/usr/local/sbin/configctl"
 IFCONFIG = "/sbin/ifconfig"
+ROUTE = "/sbin/route"
 FAILOVER_ADV_SKEW = 254
 
 
@@ -33,6 +34,37 @@ def as_int(value, default, minimum=1, maximum=60):
     return max(minimum, min(maximum, parsed))
 
 
+def parse_ip(value, version):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return ""
+    return str(address) if address.version == version else ""
+
+
+def parse_vhid_targets(value):
+    targets = []
+    seen = set()
+    for item in (value or "").split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        interface, raw_vhid = item.rsplit(":", 1)
+        interface = interface.strip()
+        try:
+            vhid = int(raw_vhid)
+        except ValueError:
+            continue
+        key = (interface, vhid)
+        if interface and 1 <= vhid <= 255 and key not in seen:
+            targets.append(key)
+            seen.add(key)
+    return tuple(targets)
+
+
 @dataclass(frozen=True)
 class Check:
     uuid: str
@@ -42,6 +74,12 @@ class Check:
     target: str
     scope: str
     vhid: int
+    vhid_targets: tuple
+    failure_advskew: int
+    fallback_ipv4_target: str
+    fallback_ipv4_gateway: str
+    fallback_ipv6_target: str
+    fallback_ipv6_gateway: str
 
 
 @dataclass(frozen=True)
@@ -78,11 +116,12 @@ def load_config(path=CONFIG_PATH):
     interface_map = {}
     interfaces = root.find("./interfaces")
     if interfaces is not None:
-        for item in list(interfaces):
+        for item in interfaces:
             interface_map[item.tag] = (item.findtext("if") or "").strip()
 
     carp_vhids = []
-    for vip in root.findall("./virtualip/vip"):
+    virtualip = root.find("./virtualip")
+    for vip in virtualip.findall("./vip") if virtualip is not None else []:
         if (vip.findtext("mode") or "").strip().lower() != "carp":
             continue
         interface = (vip.findtext("interface") or "").strip()
@@ -102,16 +141,18 @@ def load_config(path=CONFIG_PATH):
             continue
         name = (item.findtext("name") or "").strip()
         friendly = (item.findtext("interface") or "").strip()
-        target = (item.findtext("target") or "").strip()
+        target = parse_ip(item.findtext("target"), 4)
         uuid = item.attrib.get("uuid", "") or name
         scope = (item.findtext("scope") or "global").strip().lower()
-        if scope not in {"global", "vhid"}:
+        if scope not in {"global", "vhid", "vhid_group"}:
             scope = "global"
         vhid = as_int(item.findtext("vhid"), 0, 0, 255) if scope == "vhid" else 0
-        try:
-            target = str(ipaddress.IPv4Address(target))
-        except ipaddress.AddressValueError:
-            target = ""
+        if scope == "vhid" and vhid:
+            vhid_targets = ((friendly, vhid),)
+        elif scope == "vhid_group":
+            vhid_targets = parse_vhid_targets(item.findtext("vhid_targets"))
+        else:
+            vhid_targets = tuple()
         checks.append(Check(
             uuid=uuid,
             name=name,
@@ -120,6 +161,12 @@ def load_config(path=CONFIG_PATH):
             target=target,
             scope=scope,
             vhid=vhid,
+            vhid_targets=vhid_targets,
+            failure_advskew=as_int(item.findtext("failure_advskew"), FAILOVER_ADV_SKEW, 1, FAILOVER_ADV_SKEW),
+            fallback_ipv4_target=parse_ip(item.findtext("fallback_ipv4_target"), 4),
+            fallback_ipv4_gateway=parse_ip(item.findtext("fallback_ipv4_gateway"), 4),
+            fallback_ipv6_target=parse_ip(item.findtext("fallback_ipv6_target"), 6),
+            fallback_ipv6_gateway=parse_ip(item.findtext("fallback_ipv6_gateway"), 6),
         ))
 
     canonical = {
@@ -217,23 +264,29 @@ def scope_health(config, tracker):
 
     groups = {}
     for check in config.checks:
-        if check.scope != "vhid":
+        if check.scope not in {"vhid", "vhid_group"}:
             continue
-        key = f"{check.interface}:{check.vhid}"
-        groups.setdefault(key, []).append(check)
+        for interface, vhid in check.vhid_targets:
+            groups.setdefault(f"{interface}:{vhid}", []).append(check)
 
     vhid_states = {}
     for key, checks in groups.items():
         ready, healthy = _health_for_checks(checks, tracker)
         if not config.enabled:
             ready, healthy = True, True
+        blocked = [
+            check for check in checks
+            if config.enabled and tracker.records.get(check.uuid, {}).get("healthy") is not True
+        ]
+        interface, raw_vhid = key.rsplit(":", 1)
         vhid_states[key] = {
-            "interface": checks[0].interface,
-            "vhid": checks[0].vhid,
+            "interface": interface,
+            "vhid": int(raw_vhid),
             "checks": [check.name for check in checks],
             "ready": ready,
             "healthy": healthy,
-            "desired_demoted": config.enabled and not healthy,
+            "desired_demoted": bool(blocked),
+            "failure_advskew": max((check.failure_advskew for check in blocked), default=0),
         }
     return global_state, vhid_states
 
@@ -280,10 +333,10 @@ def read_carp_runtime(carp, command_func=run_command):
     return None
 
 
-def set_vhid_priority(carp, demoted, command_func=run_command):
-    advskew = FAILOVER_ADV_SKEW if demoted else carp.advskew
+def set_vhid_priority(carp, advskew, force_backup=False, command_func=run_command):
+    advskew = max(carp.advskew, min(FAILOVER_ADV_SKEW, int(advskew)))
     command = [IFCONFIG, carp.device, "vhid", str(carp.vhid), "advskew", str(advskew)]
-    if demoted:
+    if force_backup:
         command.extend(["state", "BACKUP"])
     return command_func(command, capture=False)[0] == 0
 
@@ -317,80 +370,53 @@ def reconcile_vhid_scopes(config, tracker, previous_state=None, command_func=run
         runtime = read_carp_runtime(carp, command_func)
         if runtime is None:
             continue
+        control_ok = True
         if runtime["advskew"] != carp.advskew:
-            set_vhid_priority(carp, False, command_func)
+            control_ok = set_vhid_priority(carp, carp.advskew, False, command_func)
             runtime = read_carp_runtime(carp, command_func)
-        if runtime is not None and runtime["advskew"] != carp.advskew:
+            control_ok = control_ok and runtime is not None and runtime["advskew"] == carp.advskew
+        if not control_ok:
             result.append({
-                "key": key,
-                "interface": carp.interface,
-                "device": carp.device,
-                "vhid": carp.vhid,
-                "checks": [],
-                "ready": True,
-                "healthy": True,
-                "desired_demoted": False,
-                "configured_advskew": carp.advskew,
-                "current_advskew": runtime["advskew"],
-                "carp_state": runtime["state"],
-                "control_ok": False,
-                "retired": True,
-                "error": "Failed to restore previous VHID priority",
+                "key": key, "interface": carp.interface, "device": carp.device, "vhid": carp.vhid,
+                "checks": [], "ready": True, "healthy": True, "desired_demoted": False,
+                "desired_advskew": carp.advskew, "configured_advskew": carp.advskew,
+                "current_advskew": runtime["advskew"] if runtime else None,
+                "carp_state": runtime["state"] if runtime else "UNKNOWN", "control_ok": False,
+                "retired": True, "error": "Failed to restore previous VHID priority",
             })
 
     for key, group in desired.items():
         carp = find_carp_vhid(config, group["interface"], group["vhid"])
         if carp is None:
             result.append({
-                "key": key,
-                "interface": group["interface"],
-                "device": "",
-                "vhid": group["vhid"],
-                "checks": group["checks"],
-                "ready": group["ready"],
-                "healthy": group["healthy"],
-                "desired_demoted": group["desired_demoted"],
-                "configured_advskew": None,
-                "current_advskew": None,
-                "carp_state": "MISSING",
-                "control_ok": False,
-                "retired": False,
-                "error": "CARP VHID not found on selected interface",
+                "key": key, "interface": group["interface"], "device": "", "vhid": group["vhid"],
+                "checks": group["checks"], "ready": group["ready"], "healthy": group["healthy"],
+                "desired_demoted": group["desired_demoted"], "desired_advskew": None,
+                "configured_advskew": None, "current_advskew": None, "carp_state": "MISSING",
+                "control_ok": False, "retired": False, "error": "Configured CARP VHID was not found",
             })
             continue
-
+        desired_advskew = max(carp.advskew, group["failure_advskew"]) if group["desired_demoted"] else carp.advskew
+        force_backup = desired_advskew >= FAILOVER_ADV_SKEW and group["desired_demoted"]
         runtime = read_carp_runtime(carp, command_func)
         control_ok = runtime is not None
-        if runtime is not None:
-            if group["desired_demoted"]:
-                needs_change = runtime["advskew"] != FAILOVER_ADV_SKEW or runtime["state"] != "BACKUP"
-            else:
-                needs_change = runtime["advskew"] != carp.advskew
-            if needs_change:
-                control_ok = set_vhid_priority(carp, group["desired_demoted"], command_func)
-                runtime = read_carp_runtime(carp, command_func) if control_ok else runtime
-
+        if control_ok and (runtime["advskew"] != desired_advskew or (force_backup and runtime["state"] != "BACKUP")):
+            control_ok = set_vhid_priority(carp, desired_advskew, force_backup, command_func)
+            runtime = read_carp_runtime(carp, command_func)
         if runtime is None:
             control_ok = False
-        elif group["desired_demoted"]:
-            control_ok = control_ok and runtime["advskew"] == FAILOVER_ADV_SKEW and runtime["state"] == "BACKUP"
         else:
-            control_ok = control_ok and runtime["advskew"] == carp.advskew
-
+            control_ok = control_ok and runtime["advskew"] == desired_advskew
+            if force_backup:
+                control_ok = control_ok and runtime["state"] == "BACKUP"
         result.append({
-            "key": key,
-            "interface": carp.interface,
-            "device": carp.device,
-            "vhid": carp.vhid,
-            "checks": group["checks"],
-            "ready": group["ready"],
-            "healthy": group["healthy"],
-            "desired_demoted": group["desired_demoted"],
+            "key": key, "interface": carp.interface, "device": carp.device, "vhid": carp.vhid,
+            "checks": group["checks"], "ready": group["ready"], "healthy": group["healthy"],
+            "desired_demoted": group["desired_demoted"], "desired_advskew": desired_advskew,
             "configured_advskew": carp.advskew,
             "current_advskew": runtime["advskew"] if runtime is not None else None,
             "carp_state": runtime["state"] if runtime is not None else "UNKNOWN",
-            "control_ok": control_ok,
-            "retired": False,
+            "control_ok": control_ok, "retired": False,
             "error": "" if control_ok else "Unable to enforce CARP VHID state",
         })
     return result
@@ -408,21 +434,136 @@ def reset_vhid_overrides(state, command_func=run_command):
         if runtime is None:
             continue
         if runtime["advskew"] != carp.advskew:
-            success = set_vhid_priority(carp, False, command_func) and success
+            success = set_vhid_priority(carp, carp.advskew, False, command_func) and success
     return success
 
 
-def build_state(config, tracker, ready, healthy, vhids=None, now=None):
+def _route_command(action, family, destination, gateway=None):
+    command = [ROUTE, "-n", action]
+    if family == "inet6":
+        command.append("-inet6")
+    command.extend(["-host", destination])
+    if gateway:
+        command.append(gateway)
+    return command
+
+
+def read_route_gateway(destination, family, command_func=run_command):
+    returncode, output = command_func(_route_command("get", family, destination), capture=True)
+    if returncode != 0:
+        return ""
+    match = re.search(r"^\s*gateway:\s*(\S+)", output, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def _fallback_specs(check):
+    specs = []
+    if check.fallback_ipv4_target and check.fallback_ipv4_gateway:
+        specs.append(("inet", check.fallback_ipv4_target, check.fallback_ipv4_gateway))
+    if check.fallback_ipv6_target and check.fallback_ipv6_gateway:
+        specs.append(("inet6", check.fallback_ipv6_target, check.fallback_ipv6_gateway))
+    return specs
+
+
+def reconcile_fallback_routes(config, tracker, previous_state=None, command_func=run_command):
+    previous = previous_state if isinstance(previous_state, dict) else {}
+    previous_items = previous.get("routes", []) if isinstance(previous.get("routes", []), list) else []
+    previous_by_key = {item.get("key"): item for item in previous_items if item.get("key")}
+    desired = {}
+    for check in config.checks:
+        unhealthy = config.enabled and tracker.records.get(check.uuid, {}).get("healthy") is not True
+        for family, destination, gateway in _fallback_specs(check):
+            key = f"{check.uuid}:{family}"
+            desired[key] = {
+                "key": key, "check_uuid": check.uuid, "check": check.name, "family": family,
+                "destination": destination, "gateway": gateway, "desired_installed": unhealthy,
+            }
+
+    result = []
+    for key, old in previous_by_key.items():
+        new = desired.get(key)
+        changed = new is not None and (old.get("destination") != new["destination"] or old.get("gateway") != new["gateway"])
+        if key in desired and not changed:
+            continue
+        managed = bool(old.get("managed", False))
+        gateway_now = read_route_gateway(str(old.get("destination", "")), str(old.get("family", "inet")), command_func)
+        control_ok = True
+        if managed and gateway_now == old.get("gateway"):
+            command_func(_route_command("delete", str(old.get("family", "inet")), str(old.get("destination", "")), str(old.get("gateway", ""))), capture=False)
+            gateway_now = read_route_gateway(str(old.get("destination", "")), str(old.get("family", "inet")), command_func)
+            control_ok = gateway_now != old.get("gateway")
+        if not control_ok:
+            retired = dict(old)
+            retired.update({"desired_installed": False, "installed": True, "control_ok": False, "retired": True, "error": "Failed to remove fallback route"})
+            result.append(retired)
+
+    for key, spec in desired.items():
+        old = previous_by_key.get(key, {})
+        if old and (old.get("destination") != spec["destination"] or old.get("gateway") != spec["gateway"]):
+            old = {}
+        managed = bool(old.get("managed", False))
+        gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func)
+        if spec["desired_installed"]:
+            if gateway_now != spec["gateway"]:
+                rc, _ = command_func(_route_command("add", spec["family"], spec["destination"], spec["gateway"]), capture=False)
+                if rc == 0:
+                    managed = True
+                gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func)
+            installed = gateway_now == spec["gateway"]
+            control_ok = installed
+        else:
+            if managed and gateway_now == spec["gateway"]:
+                command_func(_route_command("delete", spec["family"], spec["destination"], spec["gateway"]), capture=False)
+                gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func)
+            installed = gateway_now == spec["gateway"]
+            control_ok = not (managed and installed)
+            if control_ok:
+                managed = False
+        row = dict(spec)
+        row.update({
+            "installed": installed, "managed": managed, "control_ok": control_ok, "retired": False,
+            "error": "" if control_ok else ("Unable to install fallback route" if spec["desired_installed"] else "Unable to remove fallback route"),
+        })
+        result.append(row)
+    return result
+
+
+def reset_fallback_routes(state, command_func=run_command):
+    if not isinstance(state, dict):
+        return True
+    success = True
+    for item in state.get("routes", []):
+        if not item.get("managed", False):
+            continue
+        destination = str(item.get("destination", ""))
+        gateway = str(item.get("gateway", ""))
+        family = str(item.get("family", "inet"))
+        if not destination or not gateway:
+            continue
+        if read_route_gateway(destination, family, command_func) == gateway:
+            command_func(_route_command("delete", family, destination, gateway), capture=False)
+            success = read_route_gateway(destination, family, command_func) != gateway and success
+    return success
+
+
+
+def build_state(config, tracker, ready, healthy, vhids=None, routes=None, now=None):
     now = time.time() if now is None else now
     vhids = [] if vhids is None else vhids
+    routes = [] if routes is None else routes
     global_state, _ = scope_health(config, tracker)
     vhid_by_key = {item.get("key"): item for item in vhids if not item.get("retired")}
+    routes_by_check = {}
+    for route in routes:
+        if not route.get("retired"):
+            routes_by_check.setdefault(route.get("check_uuid"), []).append(route)
     checks = []
     by_uuid = {check.uuid: check for check in config.checks}
     for uuid, record in tracker.records.items():
         check = by_uuid.get(uuid)
         if check is None:
             continue
+        target_rows = [vhid_by_key.get(f"{interface}:{vhid}", {}) for interface, vhid in check.vhid_targets]
         row = {
             "uuid": uuid,
             "name": check.name,
@@ -431,18 +572,31 @@ def build_state(config, tracker, ready, healthy, vhids=None, now=None):
             "target": check.target,
             "scope": check.scope,
             "vhid": check.vhid,
+            "vhid_targets": [f"{interface}:{vhid}" for interface, vhid in check.vhid_targets],
+            "failure_advskew": check.failure_advskew,
+            "vhid_states": target_rows,
+            "fallback_routes": routes_by_check.get(uuid, []),
             **record,
         }
-        if check.scope == "vhid":
-            runtime = vhid_by_key.get(f"{check.interface}:{check.vhid}", {})
+        if check.scope == "vhid" and target_rows:
+            runtime = target_rows[0]
             row.update({
                 "carp_state": runtime.get("carp_state", "UNKNOWN"),
                 "configured_advskew": runtime.get("configured_advskew"),
                 "current_advskew": runtime.get("current_advskew"),
                 "control_ok": runtime.get("control_ok", False),
             })
+        elif check.scope == "vhid_group":
+            row.update({
+                "carp_state": "GROUP",
+                "configured_advskew": None,
+                "current_advskew": None,
+                "control_ok": bool(target_rows) and all(target.get("control_ok", False) for target in target_rows),
+            })
         checks.append(row)
-    control_ok = all(item.get("control_ok", False) for item in vhids)
+    vhid_control_ok = all(item.get("control_ok", False) for item in vhids)
+    route_control_ok = all(item.get("control_ok", False) for item in routes)
+    control_ok = vhid_control_ok and route_control_ok
     effective_healthy = healthy and control_ok
     return {
         "status": "ok",
@@ -455,6 +609,7 @@ def build_state(config, tracker, ready, healthy, vhids=None, now=None):
         "config_signature": config.signature,
         "global": global_state,
         "vhids": vhids,
+        "routes": routes,
         "checks": checks,
     }
 

@@ -1,38 +1,14 @@
 <form>
-    <field>
-        <id>check.enabled</id>
-        <label>Enabled</label>
-        <type>checkbox</type>
-        <help>Include this L2 reachability check in the CARP health decision.</help>
-    </field>
-    <field>
-        <id>check.name</id>
-        <label>Name</label>
-        <type>text</type>
-        <help>Unique descriptive name for this health check.</help>
-    </field>
-    <field>
-        <id>check.interface</id>
-        <label>Interface</label>
-        <type>dropdown</type>
-        <help>Logical OPNsense interface whose Layer 2 segment must reach the target.</help>
-    </field>
-    <field>
-        <id>check.target</id>
-        <label>IPv4 target</label>
-        <type>text</type>
-        <help>IPv4 address to probe with ARP on the selected interface. The probe does not consume a node-specific IPv4 address.</help>
-    </field>
-    <field>
-        <id>check.scope</id>
-        <label>CARP scope</label>
-        <type>dropdown</type>
-        <help>Global uses native CARP demotion. Specific VHID changes only that VHID on the selected interface.</help>
-    </field>
-    <field>
-        <id>check.vhid</id>
-        <label>VHID</label>
-        <type>text</type>
-        <help>Required for Specific VHID scope (1-255). Ignored for Global scope.</help>
-    </field>
+    <field><id>check.enabled</id><label>Enabled</label><type>checkbox</type><help>Include this L2 reachability check in the CARP health decision.</help></field>
+    <field><id>check.name</id><label>Name</label><type>text</type><help>Unique descriptive name for this health check.</help></field>
+    <field><id>check.interface</id><label>Probe interface</label><type>dropdown</type><help>Logical OPNsense interface on which the IPv4 ARP health probe is sent.</help></field>
+    <field><id>check.target</id><label>IPv4 probe target</label><type>text</type><help>IPv4 address that must answer ARP on the probe interface. The probe uses source 0.0.0.0.</help></field>
+    <field><id>check.scope</id><label>CARP action scope</label><type>dropdown</type><help>Global uses native CARP demotion. Specific VHID affects one VHID on the probe interface. VHID target group can affect VHIDs on other interfaces.</help></field>
+    <field><id>check.vhid</id><label>VHID</label><type>text</type><help>Required for Specific VHID scope (1-255). Ignored for Global and VHID target group scopes.</help></field>
+    <field><id>check.vhid_targets</id><label>VHID targets</label><type>text</type><help>For VHID target group scope, comma-separated logical-interface:VHID targets, for example opt2:51,opt3:52.</help></field>
+    <field><id>check.failure_advskew</id><label>Failure advskew</label><type>text</type><help>advskew enforced while this check is unhealthy. Use 254 for a hard local-segment failure; a lower value can softly move healthy VHIDs after an upstream failure.</help></field>
+    <field><id>check.fallback_ipv4_target</id><label>IPv4 fallback host</label><type>text</type><help>Optional IPv4 host route installed while unhealthy and removed on recovery.</help></field>
+    <field><id>check.fallback_ipv4_gateway</id><label>IPv4 fallback gateway</label><type>text</type><help>IPv4 peer next hop for the fallback host route, normally on the dedicated data-plane transit.</help></field>
+    <field><id>check.fallback_ipv6_target</id><label>IPv6 fallback host</label><type>text</type><help>Optional IPv6 host route installed while unhealthy and removed on recovery.</help></field>
+    <field><id>check.fallback_ipv6_gateway</id><label>IPv6 fallback gateway</label><type>text</type><help>IPv6 peer next hop for the fallback host route, normally on the dedicated data-plane transit.</help></field>
 </form>

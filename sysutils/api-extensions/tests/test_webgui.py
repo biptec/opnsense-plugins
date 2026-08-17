@@ -30,7 +30,9 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         check_ids = {node.text for node in check.findall("./field/id")}
         self.assertEqual(check_ids, {
             "check.enabled", "check.name", "check.interface", "check.target",
-            "check.scope", "check.vhid",
+            "check.scope", "check.vhid", "check.vhid_targets", "check.failure_advskew",
+            "check.fallback_ipv4_target", "check.fallback_ipv4_gateway",
+            "check.fallback_ipv6_target", "check.fallback_ipv6_gateway",
         })
 
     def test_view_uses_first_class_carp_health_api(self):
@@ -39,11 +41,24 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             self.assertIn(endpoint, view)
         for field in (
             "status-enabled", "status-running", "status-ready", "status-healthy",
-            "status-control", "runtime-checks", "CARP Scope", "CARP State",
-            "Configured advskew", "Current advskew",
+            "status-control", "runtime-checks", "runtime-routes", "CARP Scope", "CARP State",
+            "VHID Targets", "Failure advskew", "Desired advskew",
+            "Configured advskew", "Current advskew", "Conditional Fallback Routes",
         ):
             self.assertIn(field, view)
         self.assertIn("Apply Changes", view)
+
+    def test_health_check_form_exposes_routing_actions(self):
+        form = (MVC / "controllers/OPNsense/ApiExtensions/forms/carpHealthCheck.xml").read_text()
+        for field in (
+            "check.vhid_targets", "check.failure_advskew",
+            "check.fallback_ipv4_target", "check.fallback_ipv4_gateway",
+            "check.fallback_ipv6_target", "check.fallback_ipv6_gateway",
+        ):
+            self.assertIn(field, form)
+        self.assertIn("VHID target group", form)
+        view = (MVC / "views/OPNsense/ApiExtensions/carp_health.volt").read_text()
+        self.assertIn("conditional fallback", view.lower())
 
     def test_gui_controller_loads_both_forms(self):
         controller = (MVC / "controllers/OPNsense/ApiExtensions/CarpHealthController.php").read_text()

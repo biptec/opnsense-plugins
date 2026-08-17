@@ -39,14 +39,14 @@ stop_monitor()
     rm -f "${SUPERVISOR_PID}" "${CHILD_PID}"
 }
 
-reset_vhids()
+reset_actions()
 {
-    /usr/local/bin/python3 "${SCRIPT}" --reset-vhids >/dev/null 2>&1 || true
+    /usr/local/bin/python3 "${SCRIPT}" --reset-actions >/dev/null 2>&1 || true
 }
 
 case "$1" in
     start) start_monitor ;;
-    stop) stop_monitor; reset_vhids ;;
+    stop) stop_monitor; reset_actions ;;
     restart) stop_monitor; start_monitor ;;
     *) echo "usage: $0 {start|stop|restart}" >&2; exit 64 ;;
 esac
