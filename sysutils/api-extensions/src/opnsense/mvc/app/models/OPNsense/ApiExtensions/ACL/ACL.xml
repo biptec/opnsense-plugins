@@ -5,4 +5,11 @@
             <pattern>api/api_extensions/*</pattern>
         </patterns>
     </page-api-extensions>
+    <page-services-api-extensions-carp-health>
+        <name>Services: CARP health monitoring</name>
+        <patterns>
+            <pattern>ui/api_extensions/carp_health*</pattern>
+            <pattern>api/api_extensions/carp_health/*</pattern>
+        </patterns>
+    </page-services-api-extensions-carp-health>
 </acl>

@@ -1,0 +1,26 @@
+<form>
+    <field>
+        <id>check.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <help>Include this L2 reachability check in the CARP health decision.</help>
+    </field>
+    <field>
+        <id>check.name</id>
+        <label>Name</label>
+        <type>text</type>
+        <help>Unique descriptive name for this health check.</help>
+    </field>
+    <field>
+        <id>check.interface</id>
+        <label>Interface</label>
+        <type>dropdown</type>
+        <help>Logical OPNsense interface whose Layer 2 segment must reach the target.</help>
+    </field>
+    <field>
+        <id>check.target</id>
+        <label>IPv4 target</label>
+        <type>text</type>
+        <help>IPv4 address to probe with ARP on the selected interface. The probe does not consume a node-specific IPv4 address.</help>
+    </field>
+</form>
