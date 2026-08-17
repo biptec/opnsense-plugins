@@ -453,6 +453,41 @@ class CarpHealthTests(unittest.TestCase):
         self.assertEqual(commands.routes[("inet", "192.0.2.2")], "10.16.224.5")
         self.assertFalse(recovered[0]["managed"])
 
+    def test_backup_default_routes_follow_stable_carp_backup_even_when_probe_is_healthy(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-owner</name><interface>opt2</interface><target>192.0.2.1</target>
+<scope>vhid</scope><vhid>51</vhid><failure_advskew>254</failure_advskew>
+<backup_ipv4_default_gateway>10.16.224.6</backup_ipv4_default_gateway>
+<backup_ipv6_default_gateway>2001:db8:2::2</backup_ipv6_default_gateway></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"wan": True})
+        commands = FakeCommands()
+        commands.runtime["vlan02"][51]["state"] = "BACKUP"
+
+        first_vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        first_routes = carp_health.reconcile_fallback_routes(config, tracker, command_func=commands, vhids=first_vhids)
+        self.assertTrue(all(not row["desired_installed"] for row in first_routes))
+
+        previous = {"vhids": first_vhids, "routes": first_routes}
+        second_vhids = carp_health.reconcile_vhid_scopes(config, tracker, previous, commands)
+        second_routes = carp_health.reconcile_fallback_routes(config, tracker, previous, commands, second_vhids)
+        self.assertEqual(commands.routes, {
+            ("inet", "0.0.0.0/1"): "10.16.224.6",
+            ("inet", "128.0.0.0/1"): "10.16.224.6",
+            ("inet6", "::/1"): "2001:db8:2::2",
+            ("inet6", "8000::/1"): "2001:db8:2::2",
+        })
+        self.assertTrue(all(row["trigger"] == "backup" for row in second_routes))
+
+        commands.runtime["vlan02"][51]["state"] = "MASTER"
+        master_vhids = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": second_vhids, "routes": second_routes}, commands)
+        master_routes = carp_health.reconcile_fallback_routes(
+            config, tracker, {"vhids": second_vhids, "routes": second_routes}, commands, master_vhids
+        )
+        self.assertEqual(commands.routes, {})
+        self.assertTrue(all(not row["desired_installed"] and row["control_ok"] for row in master_routes))
+
     def test_default_fallback_waits_for_stable_backup_then_installs_covering_routes(self):
         checks = """
 <check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>opt2</interface><target>192.0.2.1</target>

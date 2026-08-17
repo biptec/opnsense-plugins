@@ -82,6 +82,8 @@ class Check:
     fallback_ipv6_gateway: str
     fallback_ipv4_default_gateway: str
     fallback_ipv6_default_gateway: str
+    backup_ipv4_default_gateway: str
+    backup_ipv6_default_gateway: str
 
 
 @dataclass(frozen=True)
@@ -171,6 +173,8 @@ def load_config(path=CONFIG_PATH):
             fallback_ipv6_gateway=parse_ip(item.findtext("fallback_ipv6_gateway"), 6),
             fallback_ipv4_default_gateway=parse_ip(item.findtext("fallback_ipv4_default_gateway"), 4),
             fallback_ipv6_default_gateway=parse_ip(item.findtext("fallback_ipv6_default_gateway"), 6),
+            backup_ipv4_default_gateway=parse_ip(item.findtext("backup_ipv4_default_gateway"), 4),
+            backup_ipv6_default_gateway=parse_ip(item.findtext("backup_ipv6_default_gateway"), 6),
         ))
 
     canonical = {
@@ -483,23 +487,33 @@ def read_route_gateway(destination, family, command_func=run_command, route_type
 def _fallback_specs(check):
     specs = []
     if check.fallback_ipv4_target and check.fallback_ipv4_gateway:
-        specs.append(("inet", "host", check.fallback_ipv4_target, check.fallback_ipv4_gateway))
+        specs.append(("inet", "host", check.fallback_ipv4_target, check.fallback_ipv4_gateway, "unhealthy"))
     if check.fallback_ipv6_target and check.fallback_ipv6_gateway:
-        specs.append(("inet6", "host", check.fallback_ipv6_target, check.fallback_ipv6_gateway))
+        specs.append(("inet6", "host", check.fallback_ipv6_target, check.fallback_ipv6_gateway, "unhealthy"))
     if check.fallback_ipv4_default_gateway:
         specs.extend((
-            ("inet", "network", "0.0.0.0/1", check.fallback_ipv4_default_gateway),
-            ("inet", "network", "128.0.0.0/1", check.fallback_ipv4_default_gateway),
+            ("inet", "network", "0.0.0.0/1", check.fallback_ipv4_default_gateway, "unhealthy_backup"),
+            ("inet", "network", "128.0.0.0/1", check.fallback_ipv4_default_gateway, "unhealthy_backup"),
         ))
     if check.fallback_ipv6_default_gateway:
         specs.extend((
-            ("inet6", "network", "::/1", check.fallback_ipv6_default_gateway),
-            ("inet6", "network", "8000::/1", check.fallback_ipv6_default_gateway),
+            ("inet6", "network", "::/1", check.fallback_ipv6_default_gateway, "unhealthy_backup"),
+            ("inet6", "network", "8000::/1", check.fallback_ipv6_default_gateway, "unhealthy_backup"),
+        ))
+    if check.backup_ipv4_default_gateway:
+        specs.extend((
+            ("inet", "network", "0.0.0.0/1", check.backup_ipv4_default_gateway, "backup"),
+            ("inet", "network", "128.0.0.0/1", check.backup_ipv4_default_gateway, "backup"),
+        ))
+    if check.backup_ipv6_default_gateway:
+        specs.extend((
+            ("inet6", "network", "::/1", check.backup_ipv6_default_gateway, "backup"),
+            ("inet6", "network", "8000::/1", check.backup_ipv6_default_gateway, "backup"),
         ))
     return specs
 
 
-def _default_fallback_allowed(check, config, vhids, previous_state=None):
+def _backup_default_allowed(check, config, vhids, previous_state=None):
     if check.scope == "global":
         return False
     current_by_key = {item.get("key"): item for item in (vhids or []) if not item.get("retired")}
@@ -528,14 +542,19 @@ def reconcile_fallback_routes(config, tracker, previous_state=None, command_func
     desired = {}
     for check in config.checks:
         unhealthy = config.enabled and tracker.records.get(check.uuid, {}).get("healthy") is not True
-        default_allowed = _default_fallback_allowed(check, config, vhids, previous_state)
-        for family, route_type, destination, gateway in _fallback_specs(check):
-            is_default_fallback = route_type == "network"
-            key = f"{check.uuid}:{family}:{route_type}:{destination}"
+        backup_allowed = _backup_default_allowed(check, config, vhids, previous_state)
+        for family, route_type, destination, gateway, trigger in _fallback_specs(check):
+            if trigger == "unhealthy":
+                desired_installed = unhealthy
+            elif trigger == "unhealthy_backup":
+                desired_installed = unhealthy and backup_allowed
+            else:
+                desired_installed = backup_allowed
+            key = f"{check.uuid}:{family}:{route_type}:{trigger}:{destination}"
             desired[key] = {
                 "key": key, "check_uuid": check.uuid, "check": check.name, "family": family,
-                "route_type": route_type, "destination": destination, "gateway": gateway,
-                "desired_installed": unhealthy and (not is_default_fallback or default_allowed),
+                "route_type": route_type, "trigger": trigger, "destination": destination, "gateway": gateway,
+                "desired_installed": desired_installed,
             }
 
     result = []

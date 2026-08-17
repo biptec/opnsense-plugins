@@ -54,16 +54,27 @@ class CarpHealth extends BaseModel
                 }
             }
             foreach ([
-                ['fallback_ipv4_default_gateway', FILTER_FLAG_IPV4, 'IPv4'],
-                ['fallback_ipv6_default_gateway', FILTER_FLAG_IPV6, 'IPv6'],
+                ['fallback_ipv4_default_gateway', FILTER_FLAG_IPV4, 'IPv4', 'fallback'],
+                ['fallback_ipv6_default_gateway', FILTER_FLAG_IPV6, 'IPv6', 'fallback'],
+                ['backup_ipv4_default_gateway', FILTER_FLAG_IPV4, 'IPv4', 'BACKUP'],
+                ['backup_ipv6_default_gateway', FILTER_FLAG_IPV6, 'IPv6', 'BACKUP'],
             ] as $defaultRoute) {
-                [$gatewayField, $flag, $label] = $defaultRoute;
+                [$gatewayField, $flag, $label, $routeMode] = $defaultRoute;
                 $gateway = trim((string)$check->{$gatewayField}->getValue());
                 if ($gateway !== '' && filter_var($gateway, FILTER_VALIDATE_IP, $flag) === false) {
-                    $messages->appendMessage(new Message(sprintf(gettext('%s fallback default gateway is not a valid address.'), $label), $check->__reference . '.' . $gatewayField));
+                    $messages->appendMessage(new Message(sprintf(gettext('%s %s default gateway is not a valid address.'), $label, $routeMode), $check->__reference . '.' . $gatewayField));
                 }
                 if ($gateway !== '' && $scope === 'global') {
-                    $messages->appendMessage(new Message(gettext('Fallback default routing requires a CARP-scoped health check.'), $check->__reference . '.' . $gatewayField));
+                    $messages->appendMessage(new Message(gettext('Conditional default routing requires a CARP-scoped health check.'), $check->__reference . '.' . $gatewayField));
+                }
+            }
+            foreach ([
+                ['fallback_ipv4_default_gateway', 'backup_ipv4_default_gateway', 'IPv4'],
+                ['fallback_ipv6_default_gateway', 'backup_ipv6_default_gateway', 'IPv6'],
+            ] as $exclusiveRoute) {
+                [$fallbackField, $backupField, $label] = $exclusiveRoute;
+                if (trim((string)$check->{$fallbackField}->getValue()) !== '' && trim((string)$check->{$backupField}->getValue()) !== '') {
+                    $messages->appendMessage(new Message(sprintf(gettext('%s fallback and BACKUP default gateways are mutually exclusive.'), $label), $check->__reference . '.' . $backupField));
                 }
             }
         }
