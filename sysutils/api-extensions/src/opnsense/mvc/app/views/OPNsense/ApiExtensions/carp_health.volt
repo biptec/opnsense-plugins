@@ -90,13 +90,14 @@ $(document).ready(function() {
             const routeBody = $('#runtime-routes tbody').empty();
             const routes = Array.isArray(data.routes) ? data.routes : [];
             if (routes.length === 0) {
-                $('<tr>').append($('<td>').attr('colspan', 8).addClass('text-muted')
+                $('<tr>').append($('<td>').attr('colspan', 9).addClass('text-muted')
                     .text('{{ lang._("No conditional fallback routes are configured.") }}')).appendTo(routeBody);
             } else {
                 routes.forEach(function(route) {
                     const row = $('<tr>');
                     $('<td>').text(route.check || route.check_uuid || '').appendTo(row);
                     $('<td>').text(route.family === 'inet6' ? 'IPv6' : 'IPv4').appendTo(row);
+                    $('<td>').text(route.trigger || '').appendTo(row);
                     $('<td>').text(route.destination || '').appendTo(row);
                     $('<td>').text(route.gateway || '').appendTo(row);
                     $('<td>').text(route.desired_installed ? 'Installed' : 'Absent').appendTo(row);
@@ -243,7 +244,7 @@ $(document).ready(function() {
         <h4>{{ lang._('Conditional Fallback Routes') }}</h4>
         <table id="runtime-routes" class="table table-condensed table-hover table-striped table-responsive">
             <thead><tr>
-                <th>{{ lang._('Check') }}</th><th>{{ lang._('Family') }}</th><th>{{ lang._('Destination') }}</th><th>{{ lang._('Gateway') }}</th>
+                <th>{{ lang._('Check') }}</th><th>{{ lang._('Family') }}</th><th>{{ lang._('Trigger') }}</th><th>{{ lang._('Destination') }}</th><th>{{ lang._('Gateway') }}</th>
                 <th>{{ lang._('Desired') }}</th><th>{{ lang._('Installed') }}</th><th>{{ lang._('Managed') }}</th><th>{{ lang._('Control') }}</th>
             </tr></thead>
             <tbody></tbody>

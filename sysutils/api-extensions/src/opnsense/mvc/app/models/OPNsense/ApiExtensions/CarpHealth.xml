@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/ApiExtensions/CarpHealth</mount>
     <description>CARP L2 health monitoring</description>
-    <version>1.3.0</version>
+    <version>1.4.0</version>
     <items>
         <enabled type="BooleanField">
             <Default>0</Default>
@@ -102,6 +102,12 @@
                 <fallback_ipv6_default_gateway type="NetworkField">
                     <Required>N</Required><AddressFamily>ipv6</AddressFamily><NetMaskAllowed>N</NetMaskAllowed>
                 </fallback_ipv6_default_gateway>
+                <backup_ipv4_default_gateway type="NetworkField">
+                    <Required>N</Required><AddressFamily>ipv4</AddressFamily><NetMaskAllowed>N</NetMaskAllowed>
+                </backup_ipv4_default_gateway>
+                <backup_ipv6_default_gateway type="NetworkField">
+                    <Required>N</Required><AddressFamily>ipv6</AddressFamily><NetMaskAllowed>N</NetMaskAllowed>
+                </backup_ipv6_default_gateway>
             </check>
         </checks>
     </items>
