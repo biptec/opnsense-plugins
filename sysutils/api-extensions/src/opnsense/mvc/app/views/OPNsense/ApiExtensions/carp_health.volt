@@ -243,7 +243,7 @@ $(document).ready(function() {
         <h4>{{ lang._('Conditional Fallback Routes') }}</h4>
         <table id="runtime-routes" class="table table-condensed table-hover table-striped table-responsive">
             <thead><tr>
-                <th>{{ lang._('Check') }}</th><th>{{ lang._('Family') }}</th><th>{{ lang._('Host') }}</th><th>{{ lang._('Gateway') }}</th>
+                <th>{{ lang._('Check') }}</th><th>{{ lang._('Family') }}</th><th>{{ lang._('Destination') }}</th><th>{{ lang._('Gateway') }}</th>
                 <th>{{ lang._('Desired') }}</th><th>{{ lang._('Installed') }}</th><th>{{ lang._('Managed') }}</th><th>{{ lang._('Control') }}</th>
             </tr></thead>
             <tbody></tbody>

@@ -11,4 +11,6 @@
     <field><id>check.fallback_ipv4_gateway</id><label>IPv4 fallback gateway</label><type>text</type><help>IPv4 peer next hop for the fallback host route, normally on the dedicated data-plane transit.</help></field>
     <field><id>check.fallback_ipv6_target</id><label>IPv6 fallback host</label><type>text</type><help>Optional IPv6 host route installed while unhealthy and removed on recovery.</help></field>
     <field><id>check.fallback_ipv6_gateway</id><label>IPv6 fallback gateway</label><type>text</type><help>IPv6 peer next hop for the fallback host route, normally on the dedicated data-plane transit.</help></field>
+    <field><id>check.fallback_ipv4_default_gateway</id><label>IPv4 fallback default gateway</label><type>text</type><help>Optional peer next hop used for Internet/default traffic after this check has failed and its CARP target has remained BACKUP for a full monitor cycle.</help></field>
+    <field><id>check.fallback_ipv6_default_gateway</id><label>IPv6 fallback default gateway</label><type>text</type><help>Optional IPv6 peer next hop used for Internet/default traffic after this check has failed and its CARP target has remained BACKUP for a full monitor cycle.</help></field>
 </form>
