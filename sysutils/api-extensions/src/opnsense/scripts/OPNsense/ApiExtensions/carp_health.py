@@ -80,6 +80,8 @@ class Check:
     fallback_ipv4_gateway: str
     fallback_ipv6_target: str
     fallback_ipv6_gateway: str
+    fallback_ipv4_default_gateway: str
+    fallback_ipv6_default_gateway: str
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,8 @@ def load_config(path=CONFIG_PATH):
             fallback_ipv4_gateway=parse_ip(item.findtext("fallback_ipv4_gateway"), 4),
             fallback_ipv6_target=parse_ip(item.findtext("fallback_ipv6_target"), 6),
             fallback_ipv6_gateway=parse_ip(item.findtext("fallback_ipv6_gateway"), 6),
+            fallback_ipv4_default_gateway=parse_ip(item.findtext("fallback_ipv4_default_gateway"), 4),
+            fallback_ipv6_default_gateway=parse_ip(item.findtext("fallback_ipv6_default_gateway"), 6),
         ))
 
     canonical = {
@@ -458,18 +462,18 @@ def reset_vhid_overrides(state, command_func=run_command):
     return success
 
 
-def _route_command(action, family, destination, gateway=None):
+def _route_command(action, family, destination, gateway=None, route_type="host"):
     command = [ROUTE, "-n", action]
     if family == "inet6":
         command.append("-inet6")
-    command.extend(["-host", destination])
+    command.extend(["-net" if route_type == "network" else "-host", destination])
     if gateway:
         command.append(gateway)
     return command
 
 
-def read_route_gateway(destination, family, command_func=run_command):
-    returncode, output = command_func(_route_command("get", family, destination), capture=True)
+def read_route_gateway(destination, family, command_func=run_command, route_type="host"):
+    returncode, output = command_func(_route_command("get", family, destination, route_type=route_type), capture=True)
     if returncode != 0:
         return ""
     match = re.search(r"^\s*gateway:\s*(\S+)", output, re.MULTILINE)
@@ -479,38 +483,78 @@ def read_route_gateway(destination, family, command_func=run_command):
 def _fallback_specs(check):
     specs = []
     if check.fallback_ipv4_target and check.fallback_ipv4_gateway:
-        specs.append(("inet", check.fallback_ipv4_target, check.fallback_ipv4_gateway))
+        specs.append(("inet", "host", check.fallback_ipv4_target, check.fallback_ipv4_gateway))
     if check.fallback_ipv6_target and check.fallback_ipv6_gateway:
-        specs.append(("inet6", check.fallback_ipv6_target, check.fallback_ipv6_gateway))
+        specs.append(("inet6", "host", check.fallback_ipv6_target, check.fallback_ipv6_gateway))
+    if check.fallback_ipv4_default_gateway:
+        specs.extend((
+            ("inet", "network", "0.0.0.0/1", check.fallback_ipv4_default_gateway),
+            ("inet", "network", "128.0.0.0/1", check.fallback_ipv4_default_gateway),
+        ))
+    if check.fallback_ipv6_default_gateway:
+        specs.extend((
+            ("inet6", "network", "::/1", check.fallback_ipv6_default_gateway),
+            ("inet6", "network", "8000::/1", check.fallback_ipv6_default_gateway),
+        ))
     return specs
 
 
-def reconcile_fallback_routes(config, tracker, previous_state=None, command_func=run_command):
+def _default_fallback_allowed(check, config, vhids, previous_state=None):
+    if check.scope == "global":
+        return False
+    current_by_key = {item.get("key"): item for item in (vhids or []) if not item.get("retired")}
+    previous_items = previous_state.get("vhids", []) if isinstance(previous_state, dict) else []
+    previous_by_key = {item.get("key"): item for item in previous_items if not item.get("retired")}
+    targets = resolve_vhid_targets(check, config)
+    if not targets:
+        return False
+    for interface, vhid in targets:
+        key = f"{interface}:{vhid}"
+        current = current_by_key.get(key)
+        previous = previous_by_key.get(key)
+        if current is None or previous is None:
+            return False
+        if not current.get("control_ok", False) or current.get("carp_state") != "BACKUP":
+            return False
+        if previous.get("carp_state") != "BACKUP":
+            return False
+    return True
+
+
+def reconcile_fallback_routes(config, tracker, previous_state=None, command_func=run_command, vhids=None):
     previous = previous_state if isinstance(previous_state, dict) else {}
     previous_items = previous.get("routes", []) if isinstance(previous.get("routes", []), list) else []
     previous_by_key = {item.get("key"): item for item in previous_items if item.get("key")}
     desired = {}
     for check in config.checks:
         unhealthy = config.enabled and tracker.records.get(check.uuid, {}).get("healthy") is not True
-        for family, destination, gateway in _fallback_specs(check):
-            key = f"{check.uuid}:{family}"
+        default_allowed = _default_fallback_allowed(check, config, vhids, previous_state)
+        for family, route_type, destination, gateway in _fallback_specs(check):
+            is_default_fallback = route_type == "network"
+            key = f"{check.uuid}:{family}:{route_type}:{destination}"
             desired[key] = {
                 "key": key, "check_uuid": check.uuid, "check": check.name, "family": family,
-                "destination": destination, "gateway": gateway, "desired_installed": unhealthy,
+                "route_type": route_type, "destination": destination, "gateway": gateway,
+                "desired_installed": unhealthy and (not is_default_fallback or default_allowed),
             }
 
     result = []
     for key, old in previous_by_key.items():
         new = desired.get(key)
-        changed = new is not None and (old.get("destination") != new["destination"] or old.get("gateway") != new["gateway"])
+        changed = new is not None and (
+            old.get("destination") != new["destination"]
+            or old.get("gateway") != new["gateway"]
+            or old.get("route_type", "host") != new["route_type"]
+        )
         if key in desired and not changed:
             continue
         managed = bool(old.get("managed", False))
-        gateway_now = read_route_gateway(str(old.get("destination", "")), str(old.get("family", "inet")), command_func)
+        route_type = str(old.get("route_type", "host"))
+        gateway_now = read_route_gateway(str(old.get("destination", "")), str(old.get("family", "inet")), command_func, route_type)
         control_ok = True
         if managed and gateway_now == old.get("gateway"):
-            command_func(_route_command("delete", str(old.get("family", "inet")), str(old.get("destination", "")), str(old.get("gateway", ""))), capture=False)
-            gateway_now = read_route_gateway(str(old.get("destination", "")), str(old.get("family", "inet")), command_func)
+            command_func(_route_command("delete", str(old.get("family", "inet")), str(old.get("destination", "")), str(old.get("gateway", "")), route_type), capture=False)
+            gateway_now = read_route_gateway(str(old.get("destination", "")), str(old.get("family", "inet")), command_func, route_type)
             control_ok = gateway_now != old.get("gateway")
         if not control_ok:
             retired = dict(old)
@@ -519,22 +563,26 @@ def reconcile_fallback_routes(config, tracker, previous_state=None, command_func
 
     for key, spec in desired.items():
         old = previous_by_key.get(key, {})
-        if old and (old.get("destination") != spec["destination"] or old.get("gateway") != spec["gateway"]):
+        if old and (
+            old.get("destination") != spec["destination"]
+            or old.get("gateway") != spec["gateway"]
+            or old.get("route_type", "host") != spec["route_type"]
+        ):
             old = {}
         managed = bool(old.get("managed", False))
-        gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func)
+        gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func, spec["route_type"])
         if spec["desired_installed"]:
             if gateway_now != spec["gateway"]:
-                rc, _ = command_func(_route_command("add", spec["family"], spec["destination"], spec["gateway"]), capture=False)
+                rc, _ = command_func(_route_command("add", spec["family"], spec["destination"], spec["gateway"], spec["route_type"]), capture=False)
                 if rc == 0:
                     managed = True
-                gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func)
+                gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func, spec["route_type"])
             installed = gateway_now == spec["gateway"]
             control_ok = installed
         else:
             if managed and gateway_now == spec["gateway"]:
-                command_func(_route_command("delete", spec["family"], spec["destination"], spec["gateway"]), capture=False)
-                gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func)
+                command_func(_route_command("delete", spec["family"], spec["destination"], spec["gateway"], spec["route_type"]), capture=False)
+                gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func, spec["route_type"])
             installed = gateway_now == spec["gateway"]
             control_ok = not (managed and installed)
             if control_ok:
@@ -547,7 +595,6 @@ def reconcile_fallback_routes(config, tracker, previous_state=None, command_func
         result.append(row)
     return result
 
-
 def reset_fallback_routes(state, command_func=run_command):
     if not isinstance(state, dict):
         return True
@@ -558,11 +605,12 @@ def reset_fallback_routes(state, command_func=run_command):
         destination = str(item.get("destination", ""))
         gateway = str(item.get("gateway", ""))
         family = str(item.get("family", "inet"))
+        route_type = str(item.get("route_type", "host"))
         if not destination or not gateway:
             continue
-        if read_route_gateway(destination, family, command_func) == gateway:
-            command_func(_route_command("delete", family, destination, gateway), capture=False)
-            success = read_route_gateway(destination, family, command_func) != gateway and success
+        if read_route_gateway(destination, family, command_func, route_type) == gateway:
+            command_func(_route_command("delete", family, destination, gateway, route_type), capture=False)
+            success = read_route_gateway(destination, family, command_func, route_type) != gateway and success
     return success
 
 

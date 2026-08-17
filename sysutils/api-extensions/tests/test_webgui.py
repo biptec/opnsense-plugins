@@ -33,6 +33,7 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             "check.scope", "check.vhid", "check.vhid_targets", "check.failure_advskew",
             "check.fallback_ipv4_target", "check.fallback_ipv4_gateway",
             "check.fallback_ipv6_target", "check.fallback_ipv6_gateway",
+            "check.fallback_ipv4_default_gateway", "check.fallback_ipv6_default_gateway",
         })
 
     def test_model_defaults_new_checks_to_auto_interface_with_explicit_overrides(self):
@@ -41,7 +42,7 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertEqual(scope.findtext("Default"), "interface")
         options = {node.tag for node in scope.findall("./OptionValues/*")}
         self.assertEqual(options, {"interface", "all_carp", "vhid", "vhid_group", "global"})
-        self.assertEqual(model.findtext("./version"), "1.2.0")
+        self.assertEqual(model.findtext("./version"), "1.3.0")
 
         migration = MVC / "models/OPNsense/ApiExtensions/Migrations/M1_2_0.php"
         self.assertTrue(migration.exists())
@@ -68,6 +69,7 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             "check.vhid_targets", "check.failure_advskew",
             "check.fallback_ipv4_target", "check.fallback_ipv4_gateway",
             "check.fallback_ipv6_target", "check.fallback_ipv6_gateway",
+            "check.fallback_ipv4_default_gateway", "check.fallback_ipv6_default_gateway",
         ):
             self.assertIn(field, form)
         self.assertIn("Automatic modes discover CARP VHIDs", form)

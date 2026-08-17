@@ -55,7 +55,7 @@ def run_loop():
             results = probe_all(config)
             ready, healthy = tracker.update(config.checks, results)
         vhids = reconcile_vhid_scopes(config, tracker, previous_state)
-        routes = reconcile_fallback_routes(config, tracker, previous_state)
+        routes = reconcile_fallback_routes(config, tracker, previous_state, vhids=vhids)
         state = build_state(config, tracker, ready, healthy, vhids=vhids, routes=routes)
         write_state(state)
         global_state = state.get("global", {})
@@ -102,7 +102,7 @@ def initialize():
     healthy = ready
     previous_state = read_state()
     vhids = reconcile_vhid_scopes(config, tracker, previous_state)
-    routes = reconcile_fallback_routes(config, tracker, previous_state)
+    routes = reconcile_fallback_routes(config, tracker, previous_state, vhids=vhids)
     state = build_state(config, tracker, ready, healthy, vhids=vhids, routes=routes)
     write_state(state)
     trigger_carp_service_status()

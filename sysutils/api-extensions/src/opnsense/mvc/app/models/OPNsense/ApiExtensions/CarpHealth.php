@@ -53,6 +53,19 @@ class CarpHealth extends BaseModel
                     $messages->appendMessage(new Message(sprintf(gettext('%s fallback gateway is not a valid address.'), $label), $check->__reference . '.' . $gatewayField));
                 }
             }
+            foreach ([
+                ['fallback_ipv4_default_gateway', FILTER_FLAG_IPV4, 'IPv4'],
+                ['fallback_ipv6_default_gateway', FILTER_FLAG_IPV6, 'IPv6'],
+            ] as $defaultRoute) {
+                [$gatewayField, $flag, $label] = $defaultRoute;
+                $gateway = trim((string)$check->{$gatewayField}->getValue());
+                if ($gateway !== '' && filter_var($gateway, FILTER_VALIDATE_IP, $flag) === false) {
+                    $messages->appendMessage(new Message(sprintf(gettext('%s fallback default gateway is not a valid address.'), $label), $check->__reference . '.' . $gatewayField));
+                }
+                if ($gateway !== '' && $scope === 'global') {
+                    $messages->appendMessage(new Message(gettext('Fallback default routing requires a CARP-scoped health check.'), $check->__reference . '.' . $gatewayField));
+                }
+            }
         }
         return $messages;
     }
