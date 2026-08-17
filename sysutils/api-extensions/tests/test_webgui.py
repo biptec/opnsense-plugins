@@ -30,8 +30,24 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         check_ids = {node.text for node in check.findall("./field/id")}
         self.assertEqual(check_ids, {
             "check.enabled", "check.name", "check.interface", "check.target",
-            "check.scope", "check.vhid",
+            "check.scope", "check.vhid", "check.vhid_targets", "check.failure_advskew",
+            "check.fallback_ipv4_target", "check.fallback_ipv4_gateway",
+            "check.fallback_ipv6_target", "check.fallback_ipv6_gateway",
         })
+
+    def test_model_defaults_new_checks_to_auto_interface_with_explicit_overrides(self):
+        model = ET.parse(MVC / "models/OPNsense/ApiExtensions/CarpHealth.xml").getroot()
+        scope = model.find("./items/checks/check/scope")
+        self.assertEqual(scope.findtext("Default"), "interface")
+        options = {node.tag for node in scope.findall("./OptionValues/*")}
+        self.assertEqual(options, {"interface", "all_carp", "vhid", "vhid_group", "global"})
+        self.assertEqual(model.findtext("./version"), "1.2.0")
+
+        migration = MVC / "models/OPNsense/ApiExtensions/Migrations/M1_2_0.php"
+        self.assertTrue(migration.exists())
+        migration_text = migration.read_text()
+        self.assertIn("$check->scope = 'global'", migration_text)
+        self.assertIn("Before model 1.1.0", migration_text)
 
     def test_view_uses_first_class_carp_health_api(self):
         view = (MVC / "views/OPNsense/ApiExtensions/carp_health.volt").read_text()
@@ -39,11 +55,25 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             self.assertIn(endpoint, view)
         for field in (
             "status-enabled", "status-running", "status-ready", "status-healthy",
-            "status-control", "runtime-checks", "CARP Scope", "CARP State",
-            "Configured advskew", "Current advskew",
+            "status-control", "runtime-checks", "runtime-routes", "CARP Scope", "CARP State",
+            "Resolved VHID Targets", "Failure advskew", "Desired advskew",
+            "Configured advskew", "Current advskew", "Conditional Fallback Routes",
         ):
             self.assertIn(field, view)
         self.assertIn("Apply Changes", view)
+
+    def test_health_check_form_exposes_routing_actions(self):
+        form = (MVC / "controllers/OPNsense/ApiExtensions/forms/carpHealthCheck.xml").read_text()
+        for field in (
+            "check.vhid_targets", "check.failure_advskew",
+            "check.fallback_ipv4_target", "check.fallback_ipv4_gateway",
+            "check.fallback_ipv6_target", "check.fallback_ipv6_gateway",
+        ):
+            self.assertIn(field, form)
+        self.assertIn("Automatic modes discover CARP VHIDs", form)
+        self.assertIn("advanced override", form)
+        view = (MVC / "views/OPNsense/ApiExtensions/carp_health.volt").read_text()
+        self.assertIn("conditional fallback", view.lower())
 
     def test_gui_controller_loads_both_forms(self):
         controller = (MVC / "controllers/OPNsense/ApiExtensions/CarpHealthController.php").read_text()

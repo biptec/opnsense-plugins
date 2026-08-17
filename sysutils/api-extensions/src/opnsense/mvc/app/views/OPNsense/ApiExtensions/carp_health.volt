@@ -42,30 +42,71 @@ $(document).ready(function() {
             $('#status-signature').text(data.config_signature || '-');
             $('#status-timestamp').text(data.timestamp ? new Date(Number(data.timestamp) * 1000).toLocaleString() : '-');
 
+            function displayValue(value) {
+                if (value === null || value === undefined || value === '') return '-';
+                if (Array.isArray(value)) return value.length ? value.join(', ') : '-';
+                return String(value);
+            }
+
             const tbody = $('#runtime-checks tbody').empty();
             const checks = Array.isArray(data.checks) ? data.checks : [];
             if (checks.length === 0) {
-                $('<tr>').append($('<td>').attr('colspan', 12).addClass('text-muted')
+                $('<tr>').append($('<td>').attr('colspan', 13).addClass('text-muted')
                     .text('{{ lang._("No runtime health checks are active.") }}')).appendTo(tbody);
-                return;
+            } else {
+                checks.forEach(function(check) {
+                    const row = $('<tr>');
+                    const targets = Array.isArray(check.vhid_targets) ? check.vhid_targets : [];
+                    const targetStates = Array.isArray(check.vhid_states) ? check.vhid_states : [];
+                    const desired = targetStates.map(function(item) {
+                        return (item.interface || '?') + ':' + (item.vhid || '?') + '=' + displayValue(item.desired_advskew);
+                    });
+                    const carpStates = targetStates.map(function(item) {
+                        return (item.interface || '?') + ':' + (item.vhid || '?') + '=' + (item.carp_state || 'UNKNOWN');
+                    });
+                    let scope = 'Legacy Global';
+                    if (check.scope === 'interface') scope = 'Auto Interface';
+                    if (check.scope === 'all_carp') scope = 'Auto All CARP';
+                    if (check.scope === 'vhid') scope = 'Explicit VHID';
+                    if (check.scope === 'vhid_group') scope = 'Explicit VHID Group';
+                    $('<td>').text(check.name || '').appendTo(row);
+                    $('<td>').text(check.interface || '').appendTo(row);
+                    $('<td>').text(check.target || '').appendTo(row);
+                    $('<td>').text(scope).appendTo(row);
+                    $('<td>').text(targets.length ? targets.join(', ') : (check.vhid || '-')).appendTo(row);
+                    $('<td>').text(displayValue(check.failure_advskew)).appendTo(row);
+                    $('<td>').text(carpStates.length ? carpStates.join(', ') : (check.carp_state || '-')).appendTo(row);
+                    $('<td>').text(desired.length ? desired.join(', ') : '-').appendTo(row);
+                    $('<td>').text(displayValue(check.configured_advskew)).appendTo(row);
+                    $('<td>').text(displayValue(check.current_advskew)).appendTo(row);
+                    $('<td>').append($('<span>').addClass('label ' + (check.healthy ? 'label-success' : 'label-danger'))
+                        .text(check.healthy ? 'Healthy' : 'Failed')).appendTo(row);
+                    $('<td>').text(check.failures === undefined ? 0 : check.failures).appendTo(row);
+                    $('<td>').text(check.successes === undefined ? 0 : check.successes).appendTo(row);
+                    row.appendTo(tbody);
+                });
             }
-            checks.forEach(function(check) {
-                const row = $('<tr>');
-                $('<td>').text(check.name || '').appendTo(row);
-                $('<td>').text(check.interface || '').appendTo(row);
-                $('<td>').text(check.device || '').appendTo(row);
-                $('<td>').text(check.target || '').appendTo(row);
-                $('<td>').text(check.scope === 'vhid' ? 'VHID' : 'Global').appendTo(row);
-                $('<td>').text(check.scope === 'vhid' ? (check.vhid || '-') : '-').appendTo(row);
-                $('<td>').text(check.carp_state || '-').appendTo(row);
-                $('<td>').text(check.configured_advskew === null || check.configured_advskew === undefined ? '-' : check.configured_advskew).appendTo(row);
-                $('<td>').text(check.current_advskew === null || check.current_advskew === undefined ? '-' : check.current_advskew).appendTo(row);
-                $('<td>').append($('<span>').addClass('label ' + (check.healthy ? 'label-success' : 'label-danger'))
-                    .text(check.healthy ? 'Healthy' : 'Failed')).appendTo(row);
-                $('<td>').text(check.failures === undefined ? 0 : check.failures).appendTo(row);
-                $('<td>').text(check.successes === undefined ? 0 : check.successes).appendTo(row);
-                row.appendTo(tbody);
-            });
+
+            const routeBody = $('#runtime-routes tbody').empty();
+            const routes = Array.isArray(data.routes) ? data.routes : [];
+            if (routes.length === 0) {
+                $('<tr>').append($('<td>').attr('colspan', 8).addClass('text-muted')
+                    .text('{{ lang._("No conditional fallback routes are configured.") }}')).appendTo(routeBody);
+            } else {
+                routes.forEach(function(route) {
+                    const row = $('<tr>');
+                    $('<td>').text(route.check || route.check_uuid || '').appendTo(row);
+                    $('<td>').text(route.family === 'inet6' ? 'IPv6' : 'IPv4').appendTo(row);
+                    $('<td>').text(route.destination || '').appendTo(row);
+                    $('<td>').text(route.gateway || '').appendTo(row);
+                    $('<td>').text(route.desired_installed ? 'Installed' : 'Absent').appendTo(row);
+                    $('<td>').text(route.installed ? 'Yes' : 'No').appendTo(row);
+                    $('<td>').text(route.managed ? 'Yes' : 'No').appendTo(row);
+                    $('<td>').append($('<span>').addClass('label ' + (route.control_ok ? 'label-success' : 'label-danger'))
+                        .text(route.control_ok ? 'Applied' : 'Failed')).appendTo(row);
+                    row.appendTo(routeBody);
+                });
+            }
         });
     }
 
@@ -139,7 +180,7 @@ $(document).ready(function() {
             {{ partial('layout_partials/base_form', ['fields': settingsForm, 'id': 'frm_carp_health_settings', 'apply_btn_id': 'btn_save_carp_health']) }}
         </div>
         <div class="alert alert-info">
-            {{ lang._('CARP health monitoring is fail-closed. Global checks use native CARP demotion; VHID-scoped checks only lower the selected VHID on the selected interface until that scope satisfies the recovery threshold.') }}
+            {{ lang._('CARP health monitoring is fail-closed. New checks automatically discover CARP VHIDs from OPNsense: use Probe Interface for normal per-VLAN health and All CARP for upstream/WAN health. Explicit VHID and VHID Group remain available as advanced overrides; Legacy Global keeps native global demotion behavior.') }}
         </div>
     </div>
 
@@ -156,6 +197,8 @@ $(document).ready(function() {
                     <th data-column-id="target" data-type="string">{{ lang._('IPv4 Target') }}</th>
                     <th data-column-id="scope" data-type="string">{{ lang._('CARP Scope') }}</th>
                     <th data-column-id="vhid" data-type="numeric">{{ lang._('VHID') }}</th>
+                    <th data-column-id="vhid_targets" data-type="string">{{ lang._('Resolved VHID Targets') }}</th>
+                    <th data-column-id="failure_advskew" data-type="numeric">{{ lang._('Failure advskew') }}</th>
                     <th data-column-id="commands" data-width="100" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
                     <th data-column-id="uuid" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
                 </tr>
@@ -188,10 +231,20 @@ $(document).ready(function() {
 
         <table id="runtime-checks" class="table table-condensed table-hover table-striped table-responsive">
             <thead><tr>
-                <th>{{ lang._('Name') }}</th><th>{{ lang._('Interface') }}</th><th>{{ lang._('Device') }}</th><th>{{ lang._('Target') }}</th>
-                <th>{{ lang._('Scope') }}</th><th>{{ lang._('VHID') }}</th><th>{{ lang._('CARP State') }}</th>
+                <th>{{ lang._('Name') }}</th><th>{{ lang._('Probe Interface') }}</th><th>{{ lang._('Probe Target') }}</th>
+                <th>{{ lang._('Scope') }}</th><th>{{ lang._('Resolved VHID Targets') }}</th><th>{{ lang._('Failure advskew') }}</th>
+                <th>{{ lang._('CARP State') }}</th><th>{{ lang._('Desired advskew') }}</th>
                 <th>{{ lang._('Configured advskew') }}</th><th>{{ lang._('Current advskew') }}</th>
                 <th>{{ lang._('Health') }}</th><th>{{ lang._('Failures') }}</th><th>{{ lang._('Successes') }}</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+
+        <h4>{{ lang._('Conditional Fallback Routes') }}</h4>
+        <table id="runtime-routes" class="table table-condensed table-hover table-striped table-responsive">
+            <thead><tr>
+                <th>{{ lang._('Check') }}</th><th>{{ lang._('Family') }}</th><th>{{ lang._('Host') }}</th><th>{{ lang._('Gateway') }}</th>
+                <th>{{ lang._('Desired') }}</th><th>{{ lang._('Installed') }}</th><th>{{ lang._('Managed') }}</th><th>{{ lang._('Control') }}</th>
             </tr></thead>
             <tbody></tbody>
         </table>

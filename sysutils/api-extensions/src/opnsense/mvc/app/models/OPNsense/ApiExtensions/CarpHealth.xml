@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/ApiExtensions/CarpHealth</mount>
     <description>CARP L2 health monitoring</description>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
     <items>
         <enabled type="BooleanField">
             <Default>0</Default>
@@ -56,11 +56,14 @@
                     <ValidationMessage>Specify an IPv4 address reachable on this L2 segment.</ValidationMessage>
                 </target>
                 <scope type="OptionField">
-                    <Default>global</Default>
+                    <Default>interface</Default>
                     <Required>Y</Required>
                     <OptionValues>
-                        <global>Global CARP demotion</global>
-                        <vhid>Specific VHID</vhid>
+                        <interface>Automatic: CARP on probe interface</interface>
+                        <all_carp>Automatic: all configured CARP</all_carp>
+                        <vhid>Explicit: specific VHID</vhid>
+                        <vhid_group>Explicit: VHID target group</vhid_group>
+                        <global>Legacy: global CARP demotion</global>
                     </OptionValues>
                 </scope>
                 <vhid type="IntegerField">
@@ -69,6 +72,30 @@
                     <MaximumValue>255</MaximumValue>
                     <Required>Y</Required>
                 </vhid>
+                <failure_advskew type="IntegerField">
+                    <Default>254</Default>
+                    <MinimumValue>1</MinimumValue>
+                    <MaximumValue>254</MaximumValue>
+                    <Required>Y</Required>
+                </failure_advskew>
+                <vhid_targets type="CSVListField">
+                    <Required>N</Required>
+                    <Mask>/^[0-9A-Za-z._-]+:(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/</Mask>
+                    <MaskPerItem>Y</MaskPerItem>
+                    <ValidationMessage>Use logical-interface:VHID entries with VHID between 1 and 255.</ValidationMessage>
+                </vhid_targets>
+                <fallback_ipv4_target type="NetworkField">
+                    <Required>N</Required><AddressFamily>ipv4</AddressFamily><NetMaskAllowed>N</NetMaskAllowed>
+                </fallback_ipv4_target>
+                <fallback_ipv4_gateway type="NetworkField">
+                    <Required>N</Required><AddressFamily>ipv4</AddressFamily><NetMaskAllowed>N</NetMaskAllowed>
+                </fallback_ipv4_gateway>
+                <fallback_ipv6_target type="NetworkField">
+                    <Required>N</Required><AddressFamily>ipv6</AddressFamily><NetMaskAllowed>N</NetMaskAllowed>
+                </fallback_ipv6_target>
+                <fallback_ipv6_gateway type="NetworkField">
+                    <Required>N</Required><AddressFamily>ipv6</AddressFamily><NetMaskAllowed>N</NetMaskAllowed>
+                </fallback_ipv6_gateway>
             </check>
         </checks>
     </items>

@@ -16,10 +16,33 @@ class FakeCommands:
             "vlan02": {51: {"state": "MASTER", "advskew": 10}},
             "vlan03": {52: {"state": "MASTER", "advskew": 10}},
         }
+        self.routes = {}
         self.calls = []
 
     def __call__(self, args, capture=False):
         self.calls.append(list(args))
+        if args[0] == carp_health.ROUTE:
+            action = args[2]
+            family = "inet6" if "-inet6" in args else "inet"
+            destination = args[args.index("-host") + 1]
+            key = (family, destination)
+            if action == "get":
+                gateway = self.routes.get(key)
+                if gateway is None:
+                    return 1, ""
+                return 0, f"   route to: {destination}\n    gateway: {gateway}\n"
+            gateway = args[-1]
+            if action == "add":
+                if key in self.routes:
+                    return 1, ""
+                self.routes[key] = gateway
+                return 0, ""
+            if action == "delete":
+                if self.routes.get(key) == gateway:
+                    del self.routes[key]
+                return 0, ""
+            return 1, ""
+
         device = args[1]
         if len(args) == 2:
             rows = self.runtime.get(device, {})
@@ -37,7 +60,7 @@ class FakeCommands:
         return 0, ""
 
     def mutations(self):
-        return [call for call in self.calls if len(call) > 2]
+        return [call for call in self.calls if call[0] == carp_health.IFCONFIG and len(call) > 2]
 
 
 class CarpHealthTests(unittest.TestCase):
@@ -47,7 +70,7 @@ class CarpHealthTests(unittest.TestCase):
 <check uuid="abc"><enabled>1</enabled><name>leaf</name>
 <interface>opt2</interface><target>192.0.2.2</target></check>"""
         data = f"""<opnsense>
-<interfaces><opt2><if>vlan02</if></opt2><opt3><if>vlan03</if></opt3></interfaces>
+<interfaces><wan><if>vtnet1</if></wan><opt2><if>vlan02</if></opt2><opt3><if>vlan03</if></opt3></interfaces>
 <virtualip>
 <vip><interface>opt2</interface><mode>carp</mode><vhid>51</vhid><advskew>10</advskew></vip>
 <vip><interface>opt3</interface><mode>carp</mode><vhid>52</vhid><advskew>10</advskew></vip>
@@ -83,6 +106,57 @@ class CarpHealthTests(unittest.TestCase):
         self.assertEqual(config.checks[0].vhid, 51)
         carp = carp_health.find_carp_vhid(config, "opt2", 51)
         self.assertEqual(carp.device, "vlan02")
+
+    def test_auto_interface_scope_discovers_carp_without_explicit_vhid(self):
+        checks = """
+<check uuid="leaf"><enabled>1</enabled><name>leaf</name><interface>opt2</interface>
+<target>192.0.2.2</target><scope>interface</scope></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        check = config.checks[0]
+        self.assertEqual(check.vhid_targets, tuple())
+        self.assertEqual(carp_health.resolve_vhid_targets(check, config), (("opt2", 51),))
+
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"leaf": False})
+        commands = FakeCommands()
+        vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        self.assertEqual(commands.mutations(), [[
+            carp_health.IFCONFIG, "vlan02", "vhid", "51", "advskew", "254", "state", "BACKUP"
+        ]])
+        state = carp_health.build_state(config, tracker, True, False, vhids=vhids)
+        self.assertEqual(state["checks"][0]["vhid_targets"], ["opt2:51"])
+        self.assertEqual(state["checks"][0]["configured_vhid_targets"], [])
+        self.assertTrue(state["checks"][0]["control_ok"])
+
+    def test_auto_all_carp_discovers_every_configured_vhid(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface>
+<target>192.0.2.1</target><scope>all_carp</scope><failure_advskew>200</failure_advskew></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        check = config.checks[0]
+        self.assertEqual(
+            carp_health.resolve_vhid_targets(check, config),
+            (("opt2", 51), ("opt3", 52)),
+        )
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"wan": False})
+        commands = FakeCommands()
+        vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        by_key = {row["key"]: row for row in vhids}
+        self.assertEqual(by_key["opt2:51"]["desired_advskew"], 200)
+        self.assertEqual(by_key["opt3:52"]["desired_advskew"], 200)
+
+    def test_auto_scope_without_carp_is_reported_as_control_error(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface>
+<target>192.0.2.1</target><scope>interface</scope></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"wan": False})
+        state = carp_health.build_state(config, tracker, True, False, vhids=[])
+        self.assertEqual(state["checks"][0]["vhid_targets"], [])
+        self.assertFalse(state["checks"][0]["control_ok"])
+        self.assertFalse(state["control_ok"])
 
     def test_failure_and_recovery_thresholds(self):
         config = self.make_config()
@@ -231,6 +305,152 @@ class CarpHealthTests(unittest.TestCase):
         self.assertTrue(status["healthy"])
         self.assertTrue(status["running"])
         self.assertEqual(len(status["checks"]), 1)
+
+    def test_load_config_vhid_group_and_fallback_routes(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface>
+<target>192.0.2.1</target><scope>vhid_group</scope><vhid_targets>opt2:51,opt3:52</vhid_targets>
+<failure_advskew>200</failure_advskew><fallback_ipv4_target>192.0.2.2</fallback_ipv4_target>
+<fallback_ipv4_gateway>10.16.224.5</fallback_ipv4_gateway>
+<fallback_ipv6_target>2001:db8:1::2</fallback_ipv6_target><fallback_ipv6_gateway>2001:db8:2::1</fallback_ipv6_gateway></check>"""
+        config = self.make_config(checks)
+        check = config.checks[0]
+        self.assertEqual(check.scope, "vhid_group")
+        self.assertEqual(check.vhid_targets, (("opt2", 51), ("opt3", 52)))
+        self.assertEqual(check.failure_advskew, 200)
+        self.assertEqual(check.fallback_ipv4_gateway, "10.16.224.5")
+        self.assertEqual(check.fallback_ipv6_target, "2001:db8:1::2")
+
+    def test_auto_wan_demotion_yields_to_auto_hard_local_failure(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface><target>192.0.2.1</target>
+<scope>all_carp</scope><failure_advskew>200</failure_advskew></check>
+<check uuid="leaf"><enabled>1</enabled><name>leaf-health</name><interface>opt2</interface><target>192.0.2.2</target>
+<scope>interface</scope><failure_advskew>254</failure_advskew></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        commands = FakeCommands()
+        tracker.update(config.checks, {"wan": False, "leaf": True})
+        soft = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        by_key = {row["key"]: row for row in soft}
+        self.assertEqual(by_key["opt2:51"]["desired_advskew"], 200)
+        self.assertEqual(by_key["opt3:52"]["desired_advskew"], 200)
+        tracker.update(config.checks, {"wan": False, "leaf": False})
+        hard = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": soft}, commands)
+        by_key = {row["key"]: row for row in hard}
+        self.assertEqual(by_key["opt2:51"]["desired_advskew"], 254)
+        self.assertEqual(by_key["opt2:51"]["carp_state"], "BACKUP")
+        self.assertEqual(by_key["opt3:52"]["desired_advskew"], 200)
+
+    def test_soft_cross_interface_demotion_yields_to_hard_local_failure(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface><target>192.0.2.1</target>
+<scope>vhid_group</scope><vhid_targets>opt2:51</vhid_targets><failure_advskew>200</failure_advskew></check>
+<check uuid="leaf"><enabled>1</enabled><name>leaf-health</name><interface>opt2</interface><target>192.0.2.2</target>
+<scope>vhid</scope><vhid>51</vhid><failure_advskew>254</failure_advskew></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        commands = FakeCommands()
+        tracker.update(config.checks, {"wan": False, "leaf": True})
+        soft = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        self.assertEqual(commands.runtime["vlan02"][51]["advskew"], 200)
+        self.assertEqual(commands.runtime["vlan02"][51]["state"], "MASTER")
+        self.assertEqual(soft[0]["desired_advskew"], 200)
+        tracker.update(config.checks, {"wan": False, "leaf": False})
+        hard = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": soft}, commands)
+        self.assertEqual(commands.runtime["vlan02"][51]["advskew"], 254)
+        self.assertEqual(commands.runtime["vlan02"][51]["state"], "BACKUP")
+        self.assertEqual(hard[0]["desired_advskew"], 254)
+
+    def test_fallback_routes_install_and_remove_ipv4_ipv6(self):
+        checks = """
+<check uuid="leaf"><enabled>1</enabled><name>leaf-health</name><interface>opt2</interface><target>192.0.2.2</target>
+<scope>vhid</scope><vhid>51</vhid><fallback_ipv4_target>192.0.2.2</fallback_ipv4_target>
+<fallback_ipv4_gateway>10.16.224.5</fallback_ipv4_gateway><fallback_ipv6_target>2001:db8:1::2</fallback_ipv6_target>
+<fallback_ipv6_gateway>2001:db8:2::1</fallback_ipv6_gateway></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        commands = FakeCommands()
+        tracker.update(config.checks, {"leaf": False})
+        failed = carp_health.reconcile_fallback_routes(config, tracker, command_func=commands)
+        self.assertEqual(commands.routes[("inet", "192.0.2.2")], "10.16.224.5")
+        self.assertEqual(commands.routes[("inet6", "2001:db8:1::2")], "2001:db8:2::1")
+        self.assertTrue(all(row["managed"] and row["installed"] and row["control_ok"] for row in failed))
+        tracker.update(config.checks, {"leaf": True})
+        recovered = carp_health.reconcile_fallback_routes(config, tracker, {"routes": failed}, commands)
+        self.assertEqual(commands.routes, {})
+        self.assertTrue(all(not row["installed"] and row["control_ok"] for row in recovered))
+
+    def test_fallback_route_is_fail_closed_until_first_probe(self):
+        checks = """
+<check uuid="leaf"><enabled>1</enabled><name>leaf-health</name><interface>opt2</interface><target>192.0.2.2</target>
+<scope>vhid</scope><vhid>51</vhid><fallback_ipv4_target>192.0.2.2</fallback_ipv4_target>
+<fallback_ipv4_gateway>10.16.224.5</fallback_ipv4_gateway></check>"""
+        config = self.make_config(checks)
+        tracker = carp_health.HealthTracker(2, 2)
+        commands = FakeCommands()
+        routes = carp_health.reconcile_fallback_routes(config, tracker, command_func=commands)
+        self.assertTrue(routes[0]["desired_installed"])
+        self.assertEqual(commands.routes[("inet", "192.0.2.2")], "10.16.224.5")
+
+    def test_reset_fallback_routes_only_removes_managed_routes(self):
+        commands = FakeCommands()
+        commands.routes[("inet", "192.0.2.2")] = "10.16.224.5"
+        commands.routes[("inet", "198.51.100.2")] = "10.16.224.5"
+        state = {"routes": [
+            {"family": "inet", "destination": "192.0.2.2", "gateway": "10.16.224.5", "managed": True},
+            {"family": "inet", "destination": "198.51.100.2", "gateway": "10.16.224.5", "managed": False},
+        ]}
+        self.assertTrue(carp_health.reset_fallback_routes(state, commands))
+        self.assertNotIn(("inet", "192.0.2.2"), commands.routes)
+        self.assertIn(("inet", "198.51.100.2"), commands.routes)
+
+    def test_group_status_preserves_legacy_scalar_advskew_contract(self):
+        group_checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface><target>192.0.2.1</target>
+<scope>vhid_group</scope><vhid_targets>opt2:51,opt3:52</vhid_targets><failure_advskew>200</failure_advskew></check>"""
+        config = self.make_config(group_checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        commands = FakeCommands()
+        tracker.update(config.checks, {"wan": False})
+        vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        state = carp_health.build_state(config, tracker, True, False, vhids=vhids)
+        check = state["checks"][0]
+        self.assertIsNone(check["configured_advskew"])
+        self.assertIsNone(check["current_advskew"])
+        self.assertEqual(check["carp_state"], "GROUP")
+        self.assertEqual(len(check["vhid_states"]), 2)
+
+        single_checks = """
+<check uuid="leaf"><enabled>1</enabled><name>leaf</name><interface>opt2</interface><target>192.0.2.2</target>
+<scope>vhid</scope><vhid>51</vhid></check>"""
+        config = self.make_config(single_checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        commands = FakeCommands()
+        tracker.update(config.checks, {"leaf": False})
+        vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        state = carp_health.build_state(config, tracker, True, False, vhids=vhids)
+        check = state["checks"][0]
+        self.assertIsInstance(check["configured_advskew"], int)
+        self.assertIsInstance(check["current_advskew"], int)
+
+    def test_preexisting_matching_route_is_never_claimed_or_removed(self):
+        checks = """
+<check uuid="leaf"><enabled>1</enabled><name>leaf-health</name><interface>opt2</interface><target>192.0.2.2</target>
+<scope>vhid</scope><vhid>51</vhid><fallback_ipv4_target>192.0.2.2</fallback_ipv4_target>
+<fallback_ipv4_gateway>10.16.224.5</fallback_ipv4_gateway></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        commands = FakeCommands()
+        commands.routes[("inet", "192.0.2.2")] = "10.16.224.5"
+        tracker.update(config.checks, {"leaf": False})
+        failed = carp_health.reconcile_fallback_routes(config, tracker, command_func=commands)
+        self.assertTrue(failed[0]["installed"])
+        self.assertFalse(failed[0]["managed"])
+        tracker.update(config.checks, {"leaf": True})
+        recovered = carp_health.reconcile_fallback_routes(config, tracker, {"routes": failed}, commands)
+        self.assertEqual(commands.routes[("inet", "192.0.2.2")], "10.16.224.5")
+        self.assertFalse(recovered[0]["managed"])
 
     def test_state_round_trip(self):
         config = self.make_config()
