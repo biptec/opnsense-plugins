@@ -144,7 +144,7 @@ def load_config(path=CONFIG_PATH):
         target = parse_ip(item.findtext("target"), 4)
         uuid = item.attrib.get("uuid", "") or name
         scope = (item.findtext("scope") or "global").strip().lower()
-        if scope not in {"global", "vhid", "vhid_group"}:
+        if scope not in {"global", "interface", "all_carp", "vhid", "vhid_group"}:
             scope = "global"
         vhid = as_int(item.findtext("vhid"), 0, 0, 255) if scope == "vhid" else 0
         if scope == "vhid" and vhid:
@@ -179,6 +179,26 @@ def load_config(path=CONFIG_PATH):
     }
     signature = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
     return Config(enabled, interval, failure, recovery, tuple(checks), tuple(carp_vhids), signature)
+
+
+def resolve_vhid_targets(check, config):
+    """Resolve automatic CARP scopes while preserving explicit overrides."""
+    if check.scope == "interface":
+        targets = ((carp.interface, carp.vhid) for carp in config.carp_vhids if carp.interface == check.interface)
+    elif check.scope == "all_carp":
+        targets = ((carp.interface, carp.vhid) for carp in config.carp_vhids)
+    elif check.scope in {"vhid", "vhid_group"}:
+        targets = iter(check.vhid_targets)
+    else:
+        return tuple()
+
+    result = []
+    seen = set()
+    for target in targets:
+        if target not in seen:
+            result.append(target)
+            seen.add(target)
+    return tuple(result)
 
 
 def probe(check, arping=ARPING):
@@ -264,9 +284,9 @@ def scope_health(config, tracker):
 
     groups = {}
     for check in config.checks:
-        if check.scope not in {"vhid", "vhid_group"}:
+        if check.scope not in {"interface", "all_carp", "vhid", "vhid_group"}:
             continue
-        for interface, vhid in check.vhid_targets:
+        for interface, vhid in resolve_vhid_targets(check, config):
             groups.setdefault(f"{interface}:{vhid}", []).append(check)
 
     vhid_states = {}
@@ -563,7 +583,8 @@ def build_state(config, tracker, ready, healthy, vhids=None, routes=None, now=No
         check = by_uuid.get(uuid)
         if check is None:
             continue
-        target_rows = [vhid_by_key.get(f"{interface}:{vhid}", {}) for interface, vhid in check.vhid_targets]
+        resolved_targets = resolve_vhid_targets(check, config)
+        target_rows = [vhid_by_key.get(f"{interface}:{vhid}", {}) for interface, vhid in resolved_targets]
         row = {
             "uuid": uuid,
             "name": check.name,
@@ -572,7 +593,8 @@ def build_state(config, tracker, ready, healthy, vhids=None, routes=None, now=No
             "target": check.target,
             "scope": check.scope,
             "vhid": check.vhid,
-            "vhid_targets": [f"{interface}:{vhid}" for interface, vhid in check.vhid_targets],
+            "vhid_targets": [f"{interface}:{vhid}" for interface, vhid in resolved_targets],
+            "configured_vhid_targets": [f"{interface}:{vhid}" for interface, vhid in check.vhid_targets],
             "failure_advskew": check.failure_advskew,
             "vhid_states": target_rows,
             "fallback_routes": routes_by_check.get(uuid, []),
@@ -586,17 +608,23 @@ def build_state(config, tracker, ready, healthy, vhids=None, routes=None, now=No
                 "current_advskew": runtime.get("current_advskew"),
                 "control_ok": runtime.get("control_ok", False),
             })
-        elif check.scope == "vhid_group":
+        elif check.scope in {"interface", "all_carp", "vhid_group"}:
             row.update({
                 "carp_state": "GROUP",
                 "configured_advskew": None,
                 "current_advskew": None,
                 "control_ok": bool(target_rows) and all(target.get("control_ok", False) for target in target_rows),
             })
+        else:
+            row["control_ok"] = True
         checks.append(row)
     vhid_control_ok = all(item.get("control_ok", False) for item in vhids)
     route_control_ok = all(item.get("control_ok", False) for item in routes)
-    control_ok = vhid_control_ok and route_control_ok
+    scope_resolution_ok = (not config.enabled) or all(
+        check.scope == "global" or bool(resolve_vhid_targets(check, config))
+        for check in config.checks
+    )
+    control_ok = vhid_control_ok and route_control_ok and scope_resolution_ok
     effective_healthy = healthy and control_ok
     return {
         "status": "ok",

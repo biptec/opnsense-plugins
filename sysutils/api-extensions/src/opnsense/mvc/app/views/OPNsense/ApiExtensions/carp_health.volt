@@ -64,9 +64,11 @@ $(document).ready(function() {
                     const carpStates = targetStates.map(function(item) {
                         return (item.interface || '?') + ':' + (item.vhid || '?') + '=' + (item.carp_state || 'UNKNOWN');
                     });
-                    let scope = 'Global';
-                    if (check.scope === 'vhid') scope = 'VHID';
-                    if (check.scope === 'vhid_group') scope = 'VHID Group';
+                    let scope = 'Legacy Global';
+                    if (check.scope === 'interface') scope = 'Auto Interface';
+                    if (check.scope === 'all_carp') scope = 'Auto All CARP';
+                    if (check.scope === 'vhid') scope = 'Explicit VHID';
+                    if (check.scope === 'vhid_group') scope = 'Explicit VHID Group';
                     $('<td>').text(check.name || '').appendTo(row);
                     $('<td>').text(check.interface || '').appendTo(row);
                     $('<td>').text(check.target || '').appendTo(row);
@@ -178,7 +180,7 @@ $(document).ready(function() {
             {{ partial('layout_partials/base_form', ['fields': settingsForm, 'id': 'frm_carp_health_settings', 'apply_btn_id': 'btn_save_carp_health']) }}
         </div>
         <div class="alert alert-info">
-            {{ lang._('CARP health monitoring is fail-closed. Global checks use native CARP demotion; VHID-scoped checks only lower the selected VHID on the selected interface until that scope satisfies the recovery threshold.') }}
+            {{ lang._('CARP health monitoring is fail-closed. New checks automatically discover CARP VHIDs from OPNsense: use Probe Interface for normal per-VLAN health and All CARP for upstream/WAN health. Explicit VHID and VHID Group remain available as advanced overrides; Legacy Global keeps native global demotion behavior.') }}
         </div>
     </div>
 
@@ -195,7 +197,7 @@ $(document).ready(function() {
                     <th data-column-id="target" data-type="string">{{ lang._('IPv4 Target') }}</th>
                     <th data-column-id="scope" data-type="string">{{ lang._('CARP Scope') }}</th>
                     <th data-column-id="vhid" data-type="numeric">{{ lang._('VHID') }}</th>
-                    <th data-column-id="vhid_targets" data-type="string">{{ lang._('VHID Targets') }}</th>
+                    <th data-column-id="vhid_targets" data-type="string">{{ lang._('Resolved VHID Targets') }}</th>
                     <th data-column-id="failure_advskew" data-type="numeric">{{ lang._('Failure advskew') }}</th>
                     <th data-column-id="commands" data-width="100" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
                     <th data-column-id="uuid" data-identifier="true" data-visible="false">{{ lang._('ID') }}</th>
@@ -230,7 +232,7 @@ $(document).ready(function() {
         <table id="runtime-checks" class="table table-condensed table-hover table-striped table-responsive">
             <thead><tr>
                 <th>{{ lang._('Name') }}</th><th>{{ lang._('Probe Interface') }}</th><th>{{ lang._('Probe Target') }}</th>
-                <th>{{ lang._('Scope') }}</th><th>{{ lang._('VHID Targets') }}</th><th>{{ lang._('Failure advskew') }}</th>
+                <th>{{ lang._('Scope') }}</th><th>{{ lang._('Resolved VHID Targets') }}</th><th>{{ lang._('Failure advskew') }}</th>
                 <th>{{ lang._('CARP State') }}</th><th>{{ lang._('Desired advskew') }}</th>
                 <th>{{ lang._('Configured advskew') }}</th><th>{{ lang._('Current advskew') }}</th>
                 <th>{{ lang._('Health') }}</th><th>{{ lang._('Failures') }}</th><th>{{ lang._('Successes') }}</th>

@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/ApiExtensions/CarpHealth</mount>
     <description>CARP L2 health monitoring</description>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
     <items>
         <enabled type="BooleanField">
             <Default>0</Default>
@@ -56,12 +56,14 @@
                     <ValidationMessage>Specify an IPv4 address reachable on this L2 segment.</ValidationMessage>
                 </target>
                 <scope type="OptionField">
-                    <Default>global</Default>
+                    <Default>interface</Default>
                     <Required>Y</Required>
                     <OptionValues>
-                        <global>Global CARP demotion</global>
-                        <vhid>Specific VHID</vhid>
-                        <vhid_group>VHID target group</vhid_group>
+                        <interface>Automatic: CARP on probe interface</interface>
+                        <all_carp>Automatic: all configured CARP</all_carp>
+                        <vhid>Explicit: specific VHID</vhid>
+                        <vhid_group>Explicit: VHID target group</vhid_group>
+                        <global>Legacy: global CARP demotion</global>
                     </OptionValues>
                 </scope>
                 <vhid type="IntegerField">

@@ -107,6 +107,57 @@ class CarpHealthTests(unittest.TestCase):
         carp = carp_health.find_carp_vhid(config, "opt2", 51)
         self.assertEqual(carp.device, "vlan02")
 
+    def test_auto_interface_scope_discovers_carp_without_explicit_vhid(self):
+        checks = """
+<check uuid="leaf"><enabled>1</enabled><name>leaf</name><interface>opt2</interface>
+<target>192.0.2.2</target><scope>interface</scope></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        check = config.checks[0]
+        self.assertEqual(check.vhid_targets, tuple())
+        self.assertEqual(carp_health.resolve_vhid_targets(check, config), (("opt2", 51),))
+
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"leaf": False})
+        commands = FakeCommands()
+        vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        self.assertEqual(commands.mutations(), [[
+            carp_health.IFCONFIG, "vlan02", "vhid", "51", "advskew", "254", "state", "BACKUP"
+        ]])
+        state = carp_health.build_state(config, tracker, True, False, vhids=vhids)
+        self.assertEqual(state["checks"][0]["vhid_targets"], ["opt2:51"])
+        self.assertEqual(state["checks"][0]["configured_vhid_targets"], [])
+        self.assertTrue(state["checks"][0]["control_ok"])
+
+    def test_auto_all_carp_discovers_every_configured_vhid(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface>
+<target>192.0.2.1</target><scope>all_carp</scope><failure_advskew>200</failure_advskew></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        check = config.checks[0]
+        self.assertEqual(
+            carp_health.resolve_vhid_targets(check, config),
+            (("opt2", 51), ("opt3", 52)),
+        )
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"wan": False})
+        commands = FakeCommands()
+        vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        by_key = {row["key"]: row for row in vhids}
+        self.assertEqual(by_key["opt2:51"]["desired_advskew"], 200)
+        self.assertEqual(by_key["opt3:52"]["desired_advskew"], 200)
+
+    def test_auto_scope_without_carp_is_reported_as_control_error(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface>
+<target>192.0.2.1</target><scope>interface</scope></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"wan": False})
+        state = carp_health.build_state(config, tracker, True, False, vhids=[])
+        self.assertEqual(state["checks"][0]["vhid_targets"], [])
+        self.assertFalse(state["checks"][0]["control_ok"])
+        self.assertFalse(state["control_ok"])
+
     def test_failure_and_recovery_thresholds(self):
         config = self.make_config()
         tracker = carp_health.HealthTracker(2, 2)
@@ -269,6 +320,27 @@ class CarpHealthTests(unittest.TestCase):
         self.assertEqual(check.failure_advskew, 200)
         self.assertEqual(check.fallback_ipv4_gateway, "10.16.224.5")
         self.assertEqual(check.fallback_ipv6_target, "2001:db8:1::2")
+
+    def test_auto_wan_demotion_yields_to_auto_hard_local_failure(self):
+        checks = """
+<check uuid="wan"><enabled>1</enabled><name>wan-health</name><interface>wan</interface><target>192.0.2.1</target>
+<scope>all_carp</scope><failure_advskew>200</failure_advskew></check>
+<check uuid="leaf"><enabled>1</enabled><name>leaf-health</name><interface>opt2</interface><target>192.0.2.2</target>
+<scope>interface</scope><failure_advskew>254</failure_advskew></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        commands = FakeCommands()
+        tracker.update(config.checks, {"wan": False, "leaf": True})
+        soft = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        by_key = {row["key"]: row for row in soft}
+        self.assertEqual(by_key["opt2:51"]["desired_advskew"], 200)
+        self.assertEqual(by_key["opt3:52"]["desired_advskew"], 200)
+        tracker.update(config.checks, {"wan": False, "leaf": False})
+        hard = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": soft}, commands)
+        by_key = {row["key"]: row for row in hard}
+        self.assertEqual(by_key["opt2:51"]["desired_advskew"], 254)
+        self.assertEqual(by_key["opt2:51"]["carp_state"], "BACKUP")
+        self.assertEqual(by_key["opt3:52"]["desired_advskew"], 200)
 
     def test_soft_cross_interface_demotion_yields_to_hard_local_failure(self):
         checks = """
