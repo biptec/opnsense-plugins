@@ -30,6 +30,7 @@
 namespace OPNsense\Quagga\Api;
 
 use OPNsense\Base\ApiMutableServiceControllerBase;
+use OPNsense\Core\Backend;
 
 /**
  * Class ServiceController
@@ -42,9 +43,40 @@ class ServiceController extends ApiMutableServiceControllerBase
     protected static $internalServiceEnabled = 'enabled';
     protected static $internalServiceName = 'quagga';
 
+    /**
+     * FRR can soft-reload normal routing changes, but frr-reload cannot add or
+     * remove protocol daemons from an already running watchfrr process.
+     * Restart only when the configured daemon set differs from the live set.
+     */
     protected function reconfigureForceRestart()
     {
-        // frr can reload using frr-reload and frr8-pythontools
+        $daemonModels = [
+            'ospfd' => '\OPNsense\Quagga\OSPF',
+            'ospf6d' => '\OPNsense\Quagga\OSPF6',
+            'bgpd' => '\OPNsense\Quagga\BGP',
+            'bfdd' => '\OPNsense\Quagga\BFD',
+            'ripd' => '\OPNsense\Quagga\RIP',
+            'staticd' => '\OPNsense\Quagga\STATICd',
+        ];
+
+        $backend = new Backend();
+        $runningDaemons = preg_split(
+            '/\s+/',
+            trim($backend->configdRun('quagga daemonset')),
+            -1,
+            PREG_SPLIT_NO_EMPTY
+        );
+        $runningDaemons = array_fill_keys($runningDaemons, true);
+
+        foreach ($daemonModels as $daemon => $modelClass) {
+            $model = new $modelClass();
+            $enabled = (string)$model->enabled === '1';
+            $running = isset($runningDaemons[$daemon]);
+            if ($enabled !== $running) {
+                return 1;
+            }
+        }
+
         return 0;
     }
 }
