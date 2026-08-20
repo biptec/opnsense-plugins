@@ -40,16 +40,22 @@ COMMAND="$2"
 /usr/sbin/service frr "$ACTION" "$COMMAND"
 SERVICE_EXIT_CODE=$?
 
-# If frr starts/restarts ospfd, e.g. on process error (parameter: start/restart ospfd)
+# Preserve the existing CARP event reconciliation after ospfd/all restarts.
 if [ "$2" = "ospfd" ]; then
     logger -t frr_wrapper "WATCHFRR - OSPFD - Starting CARP event handler now"
     /usr/local/opnsense/scripts/frr/carp_event_handler
 fi
-# If frr starts up (parameter: restart all)
 if [ "$2" = "all" ]; then
     (
         /usr/bin/logger -t frr_wrapper "WATCHFRR - STARTUP - Starting CARP event handler now"
         /usr/local/opnsense/scripts/frr/carp_event_handler
     ) &
+fi
+
+# Keep the CARP/OSPF connected-route reconciler supervised whenever an OSPF
+# daemon is started or FRR starts all daemons. The monitor handles adjacency
+# convergence asynchronously and does not block watchfrr.
+if [ "$2" = "ospfd" ] || [ "$2" = "ospf6d" ] || [ "$2" = "all" ]; then
+    /usr/local/opnsense/scripts/frr/carp_connected_control.sh start
 fi
 exit $SERVICE_EXIT_CODE

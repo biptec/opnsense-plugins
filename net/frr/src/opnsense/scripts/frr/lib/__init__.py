@@ -100,8 +100,12 @@ class VtySH:
             args = args + ['-c', command]
 
         response = subprocess.run(args, capture_output=True)
-        if response.stderr:
-            raise VtySHExecError(response.stderr)
+        # FRR may emit non-fatal socket-buffer warnings on stderr while the
+        # command itself succeeds. Treat the process exit status as the
+        # authoritative result; otherwise CARP event handling is disabled by
+        # harmless warnings from vtysh.
+        if response.returncode != 0:
+            raise VtySHExecError(response.stderr or response.stdout)
         if translate:
             try:
                 return translate(response.stdout)
