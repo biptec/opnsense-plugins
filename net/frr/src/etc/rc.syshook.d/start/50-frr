@@ -34,4 +34,5 @@ require_once('plugins.inc.d/frr.inc');
 
 if (frr_enabled()) {
     mwexecfm('/usr/local/opnsense/scripts/frr/carp_event_handler');
+    mwexecfm('/usr/local/opnsense/scripts/frr/carp_connected_control.sh', ['start']);
 }
