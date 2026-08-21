@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/bind/domain</mount>
     <description>BIND domain configuration</description>
-    <version>1.1.6</version>
+    <version>1.1.7</version>
     <items>
         <domains>
             <domain type="ArrayField">
@@ -43,6 +43,15 @@
                 <forwardserver type="NetworkField">
                     <AsList>Y</AsList>
                 </forwardserver>
+                <secondarytransferkey type="ModelRelationField">
+                    <Model>
+                        <template>
+                            <source>OPNsense.Bind.Tsig</source>
+                            <items>keys.key</items>
+                            <display>name</display>
+                        </template>
+                    </Model>
+                </secondarytransferkey>
                 <transferkeyalgo type="OptionField">
                     <OptionValues>
                         <hmac-sha512>HMAC-SHA512</hmac-sha512>
