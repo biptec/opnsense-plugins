@@ -205,6 +205,28 @@ class ServiceController extends ApiMutableServiceControllerBase
                 }
             }
 
+            if ($domainType === 'secondary' && (string)$domain->secondarytransferkey !== '') {
+                $transferKeyUuid = (string)$domain->secondarytransferkey;
+                if (!isset($enabledTsigKeys[$transferKeyUuid])) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('Secondary zone "%s" references a missing or disabled transfer TSIG key.'),
+                            (string)$domain->domainname
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+                if ((string)$domain->transferkeyalgo !== '' || (string)$domain->transferkeyname !== '' || (string)$domain->transferkey !== '') {
+                    throw new UserException(
+                        sprintf(
+                            gettext('Secondary zone "%s" cannot combine a shared transfer TSIG key with legacy inline transfer-key fields.'),
+                            (string)$domain->domainname
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+            }
+
             if ($domainType === 'primary' && (string)$domain->updatekeys !== '') {
                 foreach (explode(',', (string)$domain->updatekeys) as $keyUuid) {
                     if (!isset($enabledTsigKeys[$keyUuid])) {

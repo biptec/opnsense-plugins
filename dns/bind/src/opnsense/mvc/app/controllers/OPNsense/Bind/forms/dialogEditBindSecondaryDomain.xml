@@ -38,22 +38,28 @@
         <help>Set the IP address of primary server.</help>
     </field>
     <field>
-        <id>domain.transferkeyalgo</id>
-        <label>Transfer Key Algorithm</label>
+        <id>domain.secondarytransferkey</id>
+        <label>Transfer TSIG Key</label>
         <type>dropdown</type>
-        <help>Set the authentication algorithm for the TSIG key used to transfer domain data from the primary server.</help>
+        <help>Select a shared BIND TSIG key. The same key authenticates primary transfers and NOTIFY and can also be selected by BIND views. Preferred over the legacy inline transfer-key fields below.</help>
+    </field>
+    <field>
+        <id>domain.transferkeyalgo</id>
+        <label>Legacy Transfer Key Algorithm</label>
+        <type>dropdown</type>
+        <help>Legacy inline TSIG algorithm. Leave empty when Transfer TSIG Key is selected.</help>
     </field>
     <field>
         <id>domain.transferkeyname</id>
-        <label>Transfer Key Name</label>
+        <label>Legacy Transfer Key Name</label>
         <type>text</type>
-        <help>The name of the TSIG key, which must match the value on the primary server.</help>
+        <help>Legacy inline TSIG name. Leave empty when Transfer TSIG Key is selected.</help>
     </field>
     <field>
         <id>domain.transferkey</id>
-        <label>Transfer Key</label>
+        <label>Legacy Transfer Key Secret</label>
         <type>text</type>
-        <help>The TSIG key used to transfer domain data from the master server in Base64 encoding.</help>
+        <help>Legacy inline Base64 TSIG secret. Leave empty when Transfer TSIG Key is selected.</help>
     </field>
     <field>
         <id>domain.allownotifysecondary</id>
