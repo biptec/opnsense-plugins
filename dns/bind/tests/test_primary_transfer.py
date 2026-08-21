@@ -97,6 +97,7 @@ class PrimaryTransferTemplateTest(unittest.TestCase):
         rendered = render_primary_zone()
 
         self.assertIn('key "secondary-transfer";', rendered)
+        self.assertIn("notify explicit;", rendered)
         self.assertIn("also-notify {", rendered)
         self.assertIn('192.0.2.54 key "secondary-transfer";', rendered)
         self.assertEqual(rendered.count('key "secondary-transfer";'), 2)
@@ -105,6 +106,7 @@ class PrimaryTransferTemplateTest(unittest.TestCase):
         rendered = render_primary_zone(also_notify="")
 
         self.assertIn('key "secondary-transfer";', rendered)
+        self.assertNotIn("notify explicit;", rendered)
         self.assertNotIn("also-notify {", rendered)
         self.assertEqual(rendered.count('key "secondary-transfer";'), 1)
 
@@ -112,6 +114,7 @@ class PrimaryTransferTemplateTest(unittest.TestCase):
         rendered = render_primary_zone(transfer_key="")
 
         self.assertIn("192.0.2.54;", rendered)
+        self.assertNotIn("notify explicit;", rendered)
         self.assertNotIn('key "secondary-transfer";', rendered)
 
     def test_rendered_authenticated_zone_passes_named_checkconf(self):
