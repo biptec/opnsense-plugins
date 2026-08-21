@@ -315,14 +315,15 @@ def snapshot_runtime_txt(include_master=False):
 
 
 def _replace_soa_serial(text, serial):
-    lines = text.splitlines(keepends=True)
-    for index, line in enumerate(lines):
-        if re.search(r"\bIN\s+SOA\b", line, flags=re.IGNORECASE):
-            replaced, count = re.subn(r"(\(\s*)[0-9]+(\s+)", rf"\g<1>{serial}\g<2>", line, count=1)
-            if count:
-                lines[index] = replaced
-                return "".join(lines)
-    raise RuntimeError("unable to locate SOA serial in generated zone file")
+    match = re.search(
+        r"(\bIN\s+SOA\b\s+\S+\s+\S+\s+(?:\(\s*)?)([0-9]+)(?=\s)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        raise RuntimeError("unable to locate SOA serial in generated zone file")
+    start, end = match.span(2)
+    return text[:start] + str(serial) + text[end:]
 
 
 def _next_serial(serial):
