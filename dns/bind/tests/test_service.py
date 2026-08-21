@@ -197,6 +197,44 @@ class DynamicRuntimeTests(unittest.TestCase):
         self.assertIn(f'{self.owner}.\t60\tIN\tTXT\t"token"', restored)
         self.assertFalse(self.snapshot.exists())
 
+    def test_restore_advances_bind_normalized_multiline_soa(self):
+        self.zone_file.write_text(
+            "$TTL 60\n"
+            "acme.example.net. IN SOA ns.example.net. hostmaster.example.net. (\n"
+            "                10 ; serial\n"
+            "                60 ; refresh\n"
+            "                60 ; retry\n"
+            "                3600 ; expire\n"
+            "                60 ; minimum\n"
+            "                )\n"
+            "                IN NS ns.example.net.\n",
+            encoding="utf-8",
+        )
+        self.snapshot.write_text(
+            json.dumps({
+                "version": 1,
+                "zones": {
+                    self.zone_uuid: {
+                        "zone": self.zone,
+                        "serial": 12,
+                        "records": [{"owner": self.owner, "ttl": 60, "rdata": '"token"'}],
+                    }
+                },
+            }),
+            encoding="utf-8",
+        )
+        canonical = (
+            "acme.example.net. 60 IN SOA ns.example.net. hostmaster.example.net. 10 60 60 3600 60\n"
+            "acme.example.net. 60 IN NS ns.example.net.\n"
+        )
+        with mock.patch.object(bind_service, "_compile_zone", return_value=canonical):
+            bind_service.restore_runtime_txt()
+        restored = self.zone_file.read_text(encoding="utf-8")
+        self.assertIn("13 ; serial", restored)
+        self.assertNotIn("10 ; serial", restored)
+        self.assertIn(f'{self.owner}.\t60\tIN\tTXT\t"token"', restored)
+        self.assertFalse(self.snapshot.exists())
+
     def test_journal_replay_tracks_final_txt_state_and_serial(self):
         journal = self.primary / f"{self.zone_uuid}.db.jnl"
         journal.write_text("journal", encoding="ascii")
