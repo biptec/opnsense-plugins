@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/bind/general</mount>
     <description>BIND configuration</description>
-    <version>1.0.13</version>
+    <version>1.0.14</version>
     <items>
         <enabled type="BooleanField">
             <Default>0</Default>
@@ -41,6 +41,14 @@
             <AddressFamily>ipv6</AddressFamily>
             <NetMaskAllowed>N</NetMaskAllowed>
         </transfersourcev6>
+        <notifysource type="NetworkField">
+            <AddressFamily>ipv4</AddressFamily>
+            <NetMaskAllowed>N</NetMaskAllowed>
+        </notifysource>
+        <notifysourcev6 type="NetworkField">
+            <AddressFamily>ipv6</AddressFamily>
+            <NetMaskAllowed>N</NetMaskAllowed>
+        </notifysourcev6>
         <port type="PortField">
             <Default>53530</Default>
             <Required>Y</Required>

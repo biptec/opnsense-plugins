@@ -14,7 +14,7 @@ MIGRATION = ROOT / "src/opnsense/mvc/app/models/OPNsense/Bind/Migrations/M1_0_13
 class RndcSecurityContractTests(unittest.TestCase):
     def test_model_has_no_static_rndc_default(self):
         model = ET.parse(MODEL).getroot()
-        self.assertEqual(model.findtext("version"), "1.0.13")
+        self.assertEqual(model.findtext("version"), "1.0.14")
         field = model.find("./items/rndcsecret")
         self.assertIsNotNone(field)
         self.assertEqual(field.findtext("Required"), "Y")

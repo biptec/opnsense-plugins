@@ -62,6 +62,20 @@
         <help>Specify the IPv6 address used as a source for zone transfers.</help>
     </field>
     <field>
+        <id>general.notifysource</id>
+        <label>Notify Source IP</label>
+        <type>text</type>
+        <advanced>true</advanced>
+        <help>Specify the IPv4 address used as a source for outbound DNS NOTIFY messages.</help>
+    </field>
+    <field>
+        <id>general.notifysourcev6</id>
+        <label>Notify Source IPv6</label>
+        <type>text</type>
+        <advanced>true</advanced>
+        <help>Specify the IPv6 address used as a source for outbound DNS NOTIFY messages.</help>
+    </field>
+    <field>
         <id>general.forwarders</id>
         <label>DNS Forwarders</label>
         <style>tokenize</style>
