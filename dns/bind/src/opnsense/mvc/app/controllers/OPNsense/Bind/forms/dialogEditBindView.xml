@@ -30,6 +30,18 @@
         <help>Clients matching one of these ACLs are handled by this view. Ignored when Match any client is enabled.</help>
     </field>
     <field>
+        <id>view.matchclienttsigkeys</id>
+        <label>Match client TSIG keys</label>
+        <type>select_multiple</type>
+        <help>Signed requests using one of these TSIG keys are handled by this view in addition to the Match client ACLs.</help>
+    </field>
+    <field>
+        <id>view.excludematchclienttsigkeys</id>
+        <label>Exclude client TSIG keys</label>
+        <type>select_multiple</type>
+        <help>Reject these TSIG identities from this view before evaluating positive TSIG keys and client ACLs. Useful for split-horizon zone transfers over one listener address.</help>
+    </field>
+    <field>
         <id>view.matchdestinations</id>
         <label>Match destination ACLs</label>
         <type>select_multiple</type>

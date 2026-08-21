@@ -127,6 +127,36 @@ class ServiceController extends ApiMutableServiceControllerBase
             }
         }
 
+        if ($viewRoot !== null) {
+            foreach ($viewRoot->iterateItems() as $view) {
+                if ((string)$view->enabled !== '1') {
+                    continue;
+                }
+                $includedKeys = array_values(array_filter(explode(',', (string)$view->matchclienttsigkeys)));
+                $excludedKeys = array_values(array_filter(explode(',', (string)$view->excludematchclienttsigkeys)));
+                if (!empty(array_intersect($includedKeys, $excludedKeys))) {
+                    throw new UserException(
+                        sprintf(
+                            gettext('BIND view "%s" includes and excludes the same client TSIG key.'),
+                            (string)$view->name
+                        ),
+                        gettext('Configuration exception')
+                    );
+                }
+                foreach (array_unique(array_merge($includedKeys, $excludedKeys)) as $keyUuid) {
+                    if (!isset($enabledTsigKeys[$keyUuid])) {
+                        throw new UserException(
+                            sprintf(
+                                gettext('BIND view "%s" references a missing or disabled client TSIG key.'),
+                                (string)$view->name
+                            ),
+                            gettext('Configuration exception')
+                        );
+                    }
+                }
+            }
+        }
+
         $domainModel = new Domain();
         $domainRoot = $domainModel->getNodeByReference('domains.domain');
         $zoneNames = [];
