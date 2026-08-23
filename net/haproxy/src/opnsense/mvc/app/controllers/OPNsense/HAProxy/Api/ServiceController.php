@@ -62,6 +62,21 @@ class ServiceController extends ApiMutableServiceControllerBase
     }
 
     /**
+     * Reconfigure HAProxy and commit the generated staging config even when
+     * the service is disabled. The base controller only deploys the staging
+     * file as part of start/reload, which leaves a permanent Config Diff for
+     * disabled HAProxy installations.
+     */
+    public function reconfigureAction()
+    {
+        $result = parent::reconfigureAction();
+        if ($this->request->isPost() && ($result['status'] ?? null) === 'ok' && !$this->serviceEnabled()) {
+            (new Backend())->configdRun('haproxy deploy');
+        }
+        return $result;
+    }
+
+    /**
      * reconfigure force restart check, return zero for soft-reload
      */
     protected function reconfigureForceRestart()
