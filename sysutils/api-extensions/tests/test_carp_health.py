@@ -122,7 +122,7 @@ class CarpHealthTests(unittest.TestCase):
         commands = FakeCommands()
         vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
         self.assertEqual(commands.mutations(), [[
-            carp_health.IFCONFIG, "vlan02", "vhid", "51", "advskew", "254", "state", "BACKUP"
+            carp_health.IFCONFIG, "vlan02", "vhid", "51", "advskew", "254"
         ]])
         state = carp_health.build_state(config, tracker, True, False, vhids=vhids)
         self.assertEqual(state["checks"][0]["vhid_targets"], ["opt2:51"])
@@ -158,6 +158,42 @@ class CarpHealthTests(unittest.TestCase):
         self.assertEqual(state["checks"][0]["vhid_targets"], [])
         self.assertFalse(state["checks"][0]["control_ok"])
         self.assertFalse(state["control_ok"])
+
+    def test_probe_all_deduplicates_shared_device_target(self):
+        checks = """
+<check uuid="a"><enabled>1</enabled><name>wan-a</name><interface>opt2</interface>
+<target>192.0.2.2</target><scope>interface</scope></check>
+<check uuid="b"><enabled>1</enabled><name>wan-b</name><interface>opt2</interface>
+<target>192.0.2.2</target><scope>vhid</scope><vhid>51</vhid></check>"""
+        config = self.make_config(checks)
+        calls = []
+
+        def fake_probe(check):
+            calls.append((check.device, check.target))
+            return True
+
+        self.assertEqual(carp_health.probe_all(config, fake_probe), {"a": True, "b": True})
+        self.assertEqual(calls, [("vlan02", "192.0.2.2")])
+
+    def test_hard_failure_does_not_force_master_to_backup(self):
+        checks = """
+<check uuid="a"><enabled>1</enabled><name>leaf-a</name><interface>opt2</interface>
+<target>192.0.2.2</target><scope>vhid</scope><vhid>51</vhid><failure_advskew>254</failure_advskew></check>"""
+        config = self.make_config(checks, failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"a": False})
+        commands = FakeCommands()
+        first = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
+        self.assertEqual(commands.runtime["vlan02"][51], {"state": "MASTER", "advskew": 254})
+        self.assertEqual(commands.mutations(), [[
+            carp_health.IFCONFIG, "vlan02", "vhid", "51", "advskew", "254"
+        ]])
+
+        commands.calls.clear()
+        second = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": first}, commands)
+        self.assertEqual(commands.mutations(), [])
+        self.assertEqual(second[0]["carp_state"], "MASTER")
+        self.assertTrue(second[0]["control_ok"])
 
     def test_failure_and_recovery_thresholds(self):
         config = self.make_config()
@@ -222,10 +258,10 @@ class CarpHealthTests(unittest.TestCase):
         mutations = commands.mutations()
         self.assertEqual(len(mutations), 1)
         self.assertEqual(mutations[0], [
-            carp_health.IFCONFIG, "vlan02", "vhid", "51", "advskew", "254", "state", "BACKUP"
+            carp_health.IFCONFIG, "vlan02", "vhid", "51", "advskew", "254"
         ])
         by_key = {item["key"]: item for item in states}
-        self.assertEqual(by_key["opt2:51"]["carp_state"], "BACKUP")
+        self.assertEqual(by_key["opt2:51"]["carp_state"], "MASTER")
         self.assertEqual(by_key["opt2:51"]["current_advskew"], 254)
         self.assertEqual(by_key["opt3:52"]["current_advskew"], 10)
         self.assertTrue(by_key["opt3:52"]["control_ok"])
@@ -340,7 +376,7 @@ class CarpHealthTests(unittest.TestCase):
         hard = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": soft}, commands)
         by_key = {row["key"]: row for row in hard}
         self.assertEqual(by_key["opt2:51"]["desired_advskew"], 254)
-        self.assertEqual(by_key["opt2:51"]["carp_state"], "BACKUP")
+        self.assertEqual(by_key["opt2:51"]["carp_state"], "MASTER")
         self.assertEqual(by_key["opt3:52"]["desired_advskew"], 200)
 
     def test_soft_cross_interface_demotion_yields_to_hard_local_failure(self):
@@ -360,7 +396,7 @@ class CarpHealthTests(unittest.TestCase):
         tracker.update(config.checks, {"wan": False, "leaf": False})
         hard = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": soft}, commands)
         self.assertEqual(commands.runtime["vlan02"][51]["advskew"], 254)
-        self.assertEqual(commands.runtime["vlan02"][51]["state"], "BACKUP")
+        self.assertEqual(commands.runtime["vlan02"][51]["state"], "MASTER")
         self.assertEqual(hard[0]["desired_advskew"], 254)
 
     def test_fallback_routes_install_and_remove_ipv4_ipv6(self):
@@ -505,8 +541,15 @@ class CarpHealthTests(unittest.TestCase):
         self.assertEqual(commands.routes, {})
 
         previous = {"vhids": first_vhids, "routes": first_routes}
+        commands.runtime["vlan02"][51]["state"] = "BACKUP"
         second_vhids = carp_health.reconcile_vhid_scopes(config, tracker, previous, commands)
         second_routes = carp_health.reconcile_fallback_routes(config, tracker, previous, commands, second_vhids)
+        self.assertEqual(commands.routes, {})
+        self.assertTrue(all(not row["desired_installed"] for row in second_routes))
+
+        stable = {"vhids": second_vhids, "routes": second_routes}
+        third_vhids = carp_health.reconcile_vhid_scopes(config, tracker, stable, commands)
+        third_routes = carp_health.reconcile_fallback_routes(config, tracker, stable, commands, third_vhids)
         expected = {
             ("inet", "0.0.0.0/1"): "10.16.224.6",
             ("inet", "128.0.0.0/1"): "10.16.224.6",
@@ -514,13 +557,13 @@ class CarpHealthTests(unittest.TestCase):
             ("inet6", "8000::/1"): "2001:db8:2::2",
         }
         self.assertEqual(commands.routes, expected)
-        self.assertTrue(all(row["route_type"] == "network" for row in second_routes))
-        self.assertTrue(all(row["managed"] and row["installed"] and row["control_ok"] for row in second_routes))
+        self.assertTrue(all(row["route_type"] == "network" for row in third_routes))
+        self.assertTrue(all(row["managed"] and row["installed"] and row["control_ok"] for row in third_routes))
 
         tracker.update(config.checks, {"wan": True})
-        recovered_vhids = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": second_vhids, "routes": second_routes}, commands)
+        recovered_vhids = carp_health.reconcile_vhid_scopes(config, tracker, {"vhids": third_vhids, "routes": third_routes}, commands)
         recovered_routes = carp_health.reconcile_fallback_routes(
-            config, tracker, {"vhids": second_vhids, "routes": second_routes}, commands, recovered_vhids
+            config, tracker, {"vhids": third_vhids, "routes": third_routes}, commands, recovered_vhids
         )
         self.assertEqual(commands.routes, {})
         self.assertTrue(all(not row["installed"] and row["control_ok"] for row in recovered_routes))
