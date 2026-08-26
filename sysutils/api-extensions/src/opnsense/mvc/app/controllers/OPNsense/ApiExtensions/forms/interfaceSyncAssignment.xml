@@ -1,0 +1,14 @@
+<form>
+    <field>
+        <id>assignment.interface</id>
+        <label>Interface</label>
+        <type>dropdown</type>
+        <help>Every locally managed interface must have exactly one explicit policy assignment.</help>
+    </field>
+    <field>
+        <id>assignment.policy_id</id>
+        <label>Policy</label>
+        <type>dropdown</type>
+        <help>The router does not infer policy from the interface name, creator, VLAN range or service type.</help>
+    </field>
+</form>

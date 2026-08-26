@@ -228,9 +228,20 @@ def probe(check, arping=ARPING):
 def probe_all(config, probe_func=probe):
     if not config.checks:
         return {}
-    with ThreadPoolExecutor(max_workers=min(16, len(config.checks))) as executor:
-        values = list(executor.map(probe_func, config.checks))
-    return {check.uuid: value for check, value in zip(config.checks, values)}
+    representatives = {}
+    for check in config.checks:
+        representatives.setdefault((check.device, check.target), check)
+    unique_checks = list(representatives.values())
+    with ThreadPoolExecutor(max_workers=min(16, len(unique_checks))) as executor:
+        values = list(executor.map(probe_func, unique_checks))
+    by_target = {
+        (check.device, check.target): value
+        for check, value in zip(unique_checks, values)
+    }
+    return {
+        check.uuid: by_target[(check.device, check.target)]
+        for check in config.checks
+    }
 
 
 class HealthTracker:
@@ -425,18 +436,15 @@ def reconcile_vhid_scopes(config, tracker, previous_state=None, command_func=run
             })
             continue
         desired_advskew = max(carp.advskew, group["failure_advskew"]) if group["desired_demoted"] else carp.advskew
-        force_backup = desired_advskew >= FAILOVER_ADV_SKEW and group["desired_demoted"]
         runtime = read_carp_runtime(carp, command_func)
         control_ok = runtime is not None
-        if control_ok and (runtime["advskew"] != desired_advskew or (force_backup and runtime["state"] != "BACKUP")):
-            control_ok = set_vhid_priority(carp, desired_advskew, force_backup, command_func)
+        if control_ok and runtime["advskew"] != desired_advskew:
+            control_ok = set_vhid_priority(carp, desired_advskew, False, command_func)
             runtime = read_carp_runtime(carp, command_func)
         if runtime is None:
             control_ok = False
         else:
             control_ok = control_ok and runtime["advskew"] == desired_advskew
-            if force_backup:
-                control_ok = control_ok and runtime["state"] == "BACKUP"
         result.append({
             "key": key, "interface": carp.interface, "device": carp.device, "vhid": carp.vhid,
             "checks": group["checks"], "ready": group["ready"], "healthy": group["healthy"],

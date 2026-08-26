@@ -1,0 +1,72 @@
+<model>
+    <mount>//OPNsense/ApiExtensions/InterfaceSyncPolicy</mount>
+    <description>HA interface synchronization policies and assignments</description>
+    <version>1.0.0</version>
+    <items>
+        <sync_marker>
+            <enabled type="BooleanField">
+                <Default>1</Default>
+                <Required>Y</Required>
+            </enabled>
+        </sync_marker>
+        <shared>
+            <policies>
+                <policy type="ArrayField">
+                    <id type="TextField">
+                        <Required>Y</Required>
+                        <Mask>/^[a-z][a-z0-9_-]{0,31}$/</Mask>
+                        <ValidationMessage>Use 1-32 lowercase letters, numbers, underscores or dashes; start with a letter.</ValidationMessage>
+                        <Constraints>
+                            <check001>
+                                <type>UniqueConstraint</type>
+                                <ValidationMessage>Policy IDs must be unique.</ValidationMessage>
+                            </check001>
+                        </Constraints>
+                    </id>
+                    <description type="DescriptionField"/>
+                    <synchronize type="BooleanField">
+                        <Default>0</Default>
+                        <Required>Y</Required>
+                    </synchronize>
+                </policy>
+            </policies>
+        </shared>
+        <assignments>
+            <assignment type="ArrayField">
+                <interface type="InterfaceField">
+                    <Required>Y</Required>
+                    <AllowDynamic>Y</AllowDynamic>
+                    <Constraints>
+                        <check001>
+                            <type>UniqueConstraint</type>
+                            <ValidationMessage>Each interface must have exactly one policy assignment.</ValidationMessage>
+                        </check001>
+                    </Constraints>
+                </interface>
+                <policy_id type="ModelRelationField">
+                    <Required>Y</Required>
+                    <Model>
+                        <template>
+                            <source>OPNsense.ApiExtensions.InterfaceSyncPolicy</source>
+                            <items>shared.policies.policy</items>
+                            <display>id</display>
+                        </template>
+                    </Model>
+                    <ValidationMessage>Select an existing interface sync policy.</ValidationMessage>
+                </policy_id>
+            </assignment>
+        </assignments>
+        <replicas>
+            <replica type="ArrayField">
+                <interface type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^[A-Za-z0-9_.:-]{1,64}$/</Mask>
+                </interface>
+                <policy_id type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^[a-z][a-z0-9_-]{0,31}$/</Mask>
+                </policy_id>
+            </replica>
+        </replicas>
+    </items>
+</model>
