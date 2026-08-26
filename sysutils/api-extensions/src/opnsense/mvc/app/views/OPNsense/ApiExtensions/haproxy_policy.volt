@@ -223,6 +223,7 @@ $(document).ready(function() {
         $('#grid-haproxy-policy-overview')
             .on('selected.rs.jquery.bootgrid deselected.rs.jquery.bootgrid loaded.rs.jquery.bootgrid', updateBulkState);
         $('#haproxy-policy-bulk-policy').on('changed.bs.select change', updateBulkState);
+        bindHaproxyNativeRefresh();
         updateBulkState();
     }
 
@@ -276,7 +277,7 @@ $(document).ready(function() {
             overviewGrid.bootgrid('reload');
         }
     });
-    $(document).on('click', '#btn-haproxy-policy-refresh', function() {
+    function refreshHaproxySafely() {
         if (!Object.keys(pendingAssignments).length) {
             refreshOverview();
             return;
@@ -292,7 +293,13 @@ $(document).ready(function() {
                 refreshOverview();
             }
         );
-    });
+    }
+
+    function bindHaproxyNativeRefresh() {
+        $('#grid-haproxy-policy-overview-refresh-button')
+            .off('click')
+            .on('click', refreshHaproxySafely);
+    }
     $(document).on('click', '#btn-haproxy-policy-bulk-apply', function() {
         const policyId = $('#haproxy-policy-bulk-policy').val();
         const selected = overviewGrid ? overviewGrid.bootgrid('getTable').getSelectedData() : [];
@@ -488,10 +495,6 @@ $(document).ready(function() {
             <button id="btn-haproxy-policy-save-changes" type="button" class="btn btn-primary __mr" disabled>
                 <i class="fa fa-fw fa-save"></i>
                 {{ lang._('Save changes') }}
-            </button>
-            <button id="btn-haproxy-policy-refresh" type="button" class="btn btn-default __mr">
-                <i class="fa fa-fw fa-refresh"></i>
-                {{ lang._('Refresh') }}
             </button>
             <div id="haproxy-policy-pending-count" style="display:none;"></div>
         </div>

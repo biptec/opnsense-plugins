@@ -105,6 +105,13 @@ final class HAProxySync
     {
         $rows = array_values($rows);
         if ($rows === []) {
+            // Empty HAProxy MVC sections legitimately persist as either an
+            // empty string or an empty array. Preserve an already-empty shape
+            // so save/reload normalization cannot manufacture perpetual
+            // `changed=true` results on an empty authoritative payload.
+            if ($current === '' || $current === null || $current === []) {
+                return $current;
+            }
             return '';
         }
 
@@ -165,7 +172,7 @@ final class HAProxySync
             return [];
         }
         if (!is_array($root)) {
-            self::fail('InterfaceSyncPolicy configuration must be an object');
+            self::fail('HA sync policy configuration must be an object');
         }
         return $root;
     }

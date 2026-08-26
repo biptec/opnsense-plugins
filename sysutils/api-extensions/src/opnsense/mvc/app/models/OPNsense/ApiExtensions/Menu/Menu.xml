@@ -1,7 +1,7 @@
 <menu>
     <System>
         <HighAvailability>
-            <InterfacePolicies order="150" VisibleName="Interface Sync Policies" url="/ui/api_extensions/interface_policy" />
+            <InterfacePolicies order="150" VisibleName="HA Sync Policies" url="/ui/api_extensions/interface_policy" />
         </HighAvailability>
     </System>
     <Services>
