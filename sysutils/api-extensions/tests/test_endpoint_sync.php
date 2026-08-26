@@ -53,6 +53,30 @@ eq(false, $same['changed'], 'idempotent');
 eq([], $same['plan']['configure_vlans'], 'idempotent vlan plan');
 eq('receiver-uuid', $same['config']['vlans']['vlan'][2]['@attributes']['uuid'], 'uuid stable');
 
+$legacy = $r['config'];
+$legacy['virtualip']['vip'] = $legacy['virtualip']['vip'] ?? [];
+$legacy['virtualip']['vip'][] = ['interface'=>'ep_demo_0123abcd','vhid'=>'77','nosync'=>'1','descr'=>'legacy endpoint vip'];
+$legacy['virtualip']['vip'][] = ['interface'=>'core_wan','vhid'=>'101','nosync'=>'1','descr'=>'core vip'];
+$legacy['gateways']['gateway_item'] = $legacy['gateways']['gateway_item'] ?? [];
+$legacy['gateways']['gateway_item'][] = ['name'=>'nc-ep-abc-v4','interface'=>'ep_demo_0123abcd','nosync'=>'1'];
+$legacy['gateways']['gateway_item'][] = ['name'=>'WAN_GW','interface'=>'core_wan','nosync'=>'1'];
+$legacy['filter']['rule'] = $legacy['filter']['rule'] ?? [];
+$legacy['filter']['rule'][] = ['interface'=>'ep_demo_0123abcd','nosync'=>'1','descr'=>'legacy endpoint rule'];
+$legacy['filter']['rule'][] = ['interface'=>'core_wan','nosync'=>'1','descr'=>'core rule'];
+$legacy['OPNsense']['Firewall']['Filter']['rules']['rule'] = $legacy['OPNsense']['Firewall']['Filter']['rules']['rule'] ?? [];
+$legacy['OPNsense']['Firewall']['Filter']['rules']['rule'][] = ['interface'=>'ep_demo_0123abcd','nosync'=>'1','description'=>'mvc endpoint rule'];
+$legacy['OPNsense']['Firewall']['Filter']['rules']['rule'][] = ['interface'=>'core_wan','nosync'=>'1','description'=>'mvc core rule'];
+$adopted = EndpointSync::reconcile($legacy, $payload, fn()=>'unused');
+eq(['virtualip'=>1,'gateways'=>1,'rules'=>2], $adopted['plan']['adopted_nosync'], 'legacy endpoint native records adopted');
+eq(false, isset($adopted['config']['virtualip']['vip'][0]['nosync']), 'endpoint vip nosync cleared');
+eq('1', $adopted['config']['virtualip']['vip'][1]['nosync'], 'core vip nosync preserved');
+eq(false, isset($adopted['config']['gateways']['gateway_item'][0]['nosync']), 'endpoint gateway nosync cleared');
+eq('1', $adopted['config']['gateways']['gateway_item'][1]['nosync'], 'core gateway nosync preserved');
+eq(false, isset($adopted['config']['filter']['rule'][0]['nosync']), 'legacy endpoint rule nosync cleared');
+eq('1', $adopted['config']['filter']['rule'][1]['nosync'], 'legacy core rule nosync preserved');
+eq(false, isset($adopted['config']['OPNsense']['Firewall']['Filter']['rules']['rule'][0]['nosync']), 'mvc endpoint rule nosync cleared');
+eq('1', $adopted['config']['OPNsense']['Firewall']['Filter']['rules']['rule'][1]['nosync'], 'mvc core rule nosync preserved');
+
 $moved = EndpointSync::reconcile($r['config'], ['version'=>1,'endpoints'=>[[
     'identifier'=>'ep_demo_0123abcd','description'=>'Endpoint demo moved','tag'=>778,'device'=>'vlan778'
 ]],'prune'=>false], fn()=>'moved-uuid');

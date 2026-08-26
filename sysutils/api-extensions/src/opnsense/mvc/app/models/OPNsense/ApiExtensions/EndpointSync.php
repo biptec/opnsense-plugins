@@ -180,6 +180,76 @@ final class EndpointSync
         return ['version' => self::VERSION, 'endpoints' => $out, 'prune' => $payload['prune']];
     }
 
+    private static function interfaceInScope($value, array $scope): bool
+    {
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                if (self::interfaceInScope($item, $scope)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        foreach (preg_split('/[,\s]+/', trim((string)$value), -1, PREG_SPLIT_NO_EMPTY) as $identifier) {
+            if (isset($scope[$identifier])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function clearNoSyncRecords(array &$records, array $scope): int
+    {
+        $changed = 0;
+        if (array_key_exists('interface', $records)) {
+            if (self::interfaceInScope($records['interface'], $scope) && self::flag($records['nosync'] ?? null)) {
+                unset($records['nosync']);
+                $changed++;
+            }
+            return $changed;
+        }
+        foreach ($records as &$record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            if (self::interfaceInScope($record['interface'] ?? '', $scope) && self::flag($record['nosync'] ?? null)) {
+                unset($record['nosync']);
+                $changed++;
+            }
+        }
+        unset($record);
+        return $changed;
+    }
+
+    private static function adoptNativeEndpointRecords(array &$config, array $identifiers): array
+    {
+        $scope = array_fill_keys($identifiers, true);
+        $result = ['virtualip' => 0, 'gateways' => 0, 'rules' => 0];
+        if ($scope === []) {
+            return $result;
+        }
+
+        if (isset($config['virtualip']['vip']) && is_array($config['virtualip']['vip'])) {
+            $result['virtualip'] += self::clearNoSyncRecords($config['virtualip']['vip'], $scope);
+        }
+        if (isset($config['gateways']['gateway_item']) && is_array($config['gateways']['gateway_item'])) {
+            $result['gateways'] += self::clearNoSyncRecords($config['gateways']['gateway_item'], $scope);
+        }
+        if (isset($config['OPNsense']['Gateways']['gateway_item']) && is_array($config['OPNsense']['Gateways']['gateway_item'])) {
+            $result['gateways'] += self::clearNoSyncRecords($config['OPNsense']['Gateways']['gateway_item'], $scope);
+        }
+        if (isset($config['filter']['rule']) && is_array($config['filter']['rule'])) {
+            $result['rules'] += self::clearNoSyncRecords($config['filter']['rule'], $scope);
+        }
+        if (
+            isset($config['OPNsense']['Firewall']['Filter']['rules']['rule']) &&
+            is_array($config['OPNsense']['Firewall']['Filter']['rules']['rule'])
+        ) {
+            $result['rules'] += self::clearNoSyncRecords($config['OPNsense']['Firewall']['Filter']['rules']['rule'], $scope);
+        }
+        return $result;
+    }
+
     public static function localTrunkParent(array $config): string
     {
         $id = trim((string)($config['hasync']['pfsyncinterface'] ?? ''));
@@ -216,7 +286,7 @@ final class EndpointSync
             if (self::isEndpointIdentifier((string)$id)) {
                 $current[(string)$id] = $ifc;
                 if ($device !== '') {
-                    $currentDevices[$device] = true;
+                    $currentDevices[$device] = (string)$id;
                 }
             } elseif ($device !== '') {
                 $otherDevices[$device] = (string)$id;
@@ -308,6 +378,9 @@ final class EndpointSync
         }
         $next['vlans']['vlan'] = array_values($kept);
 
+        $adoptIdentifiers = array_values(array_unique(array_merge(array_keys($current), array_keys($desired))));
+        $adoptedNoSync = self::adoptNativeEndpointRecords($next, $adoptIdentifiers);
+
         $destroy = [];
         foreach ($currentDevices as $device => $id) {
             $idDesired = isset($desired[$id]);
@@ -334,6 +407,7 @@ final class EndpointSync
                 'destroy_vlans' => $destroy,
                 'configure_vlans' => $configureVlan,
                 'configure_interfaces' => $configureIf,
+                'adopted_nosync' => $adoptedNoSync,
             ],
         ];
     }
