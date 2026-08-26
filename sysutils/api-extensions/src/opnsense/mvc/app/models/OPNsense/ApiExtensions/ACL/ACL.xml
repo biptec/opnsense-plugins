@@ -5,6 +5,14 @@
             <pattern>api/api_extensions/*</pattern>
         </patterns>
     </page-api-extensions>
+    <page-system-api-extensions-interface-policy>
+        <name>System: High Availability interface sync policies</name>
+        <patterns>
+            <pattern>ui/api_extensions/interface_policy*</pattern>
+            <pattern>api/api_extensions/interface_policy/*</pattern>
+            <pattern>api/api_extensions/interface_sync/*</pattern>
+        </patterns>
+    </page-system-api-extensions-interface-policy>
     <page-services-api-extensions-carp-health>
         <name>Services: CARP health monitoring</name>
         <patterns>

@@ -1,0 +1,19 @@
+<form>
+    <field>
+        <id>policy.id</id>
+        <label>Policy ID</label>
+        <type>text</type>
+        <help>Stable identifier used by WebUI, API and Terraform. It is configuration data, not a special hard-coded router class.</help>
+    </field>
+    <field>
+        <id>policy.description</id>
+        <label>Description</label>
+        <type>text</type>
+    </field>
+    <field>
+        <id>policy.synchronize</id>
+        <label>Synchronize</label>
+        <type>checkbox</type>
+        <help>Interfaces assigned to this policy are eligible for HA VLAN/interface synchronization when the Policy-managed Interfaces / VLANs HA service is enabled.</help>
+    </field>
+</form>

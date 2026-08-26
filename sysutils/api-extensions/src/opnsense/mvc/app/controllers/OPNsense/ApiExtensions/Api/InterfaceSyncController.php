@@ -4,7 +4,7 @@ namespace OPNsense\ApiExtensions\Api;
 use OPNsense\Base\ApiControllerBase;
 use OPNsense\Core\Backend;
 
-class EndpointSyncController extends ApiControllerBase
+class InterfaceSyncController extends ApiControllerBase
 {
     public function pushAction()
     {

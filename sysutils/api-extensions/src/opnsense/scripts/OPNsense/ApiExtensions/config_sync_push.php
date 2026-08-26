@@ -3,9 +3,9 @@
 require_once 'util.inc';
 require_once 'config.inc';
 require_once 'XMLRPC_Client.inc';
-require_once '/usr/local/opnsense/mvc/app/models/OPNsense/ApiExtensions/EndpointSync.php';
+require_once '/usr/local/opnsense/mvc/app/models/OPNsense/ApiExtensions/InterfaceSync.php';
 
-use OPNsense\ApiExtensions\EndpointSync;
+use OPNsense\ApiExtensions\InterfaceSync;
 
 try {
     global $config;
@@ -13,29 +13,33 @@ try {
         throw new \RuntimeException('HA configuration synchronization peer is not configured');
     }
 
-    $preparePayload = EndpointSync::buildPayload($config, false);
-    $prepared = xmlrpc_execute('opnsense.api_extensions_sync_endpoints', $preparePayload);
+    $preparePayload = InterfaceSync::buildPayload($config, false);
+    $prepared = xmlrpc_execute('opnsense.api_extensions_sync_interfaces', $preparePayload);
     if (!is_array($prepared) || ($prepared['status'] ?? '') !== 'ok') {
-        throw new \RuntimeException('endpoint scaffold peer prepare failed');
+        throw new \RuntimeException('policy-managed interface peer prepare failed');
     }
 
     $output = [];
     $status = 0;
-    exec('/usr/local/etc/rc.filter_synchronize restart_services 2>&1', $output, $status);
+    // The standard restore path already applies VIPs and calls remote filter_configure,
+    // which reconfigures routing, resolver state, and PF.  Do not request the optional
+    // global service restart sweep here: it restarts configd itself while CARP hooks are
+    // still issuing configd requests and creates a transient control-plane outage.
+    exec('/usr/local/etc/rc.filter_synchronize 2>&1', $output, $status);
     if ($status !== 0) {
         throw new \RuntimeException(sprintf('standard HA configuration synchronization failed with exit status %d', $status));
     }
 
-    $prunePayload = EndpointSync::buildPayload($config, true);
-    $pruned = xmlrpc_execute('opnsense.api_extensions_sync_endpoints', $prunePayload);
+    $prunePayload = InterfaceSync::buildPayload($config, true);
+    $pruned = xmlrpc_execute('opnsense.api_extensions_sync_interfaces', $prunePayload);
     if (!is_array($pruned) || ($pruned['status'] ?? '') !== 'ok') {
-        throw new \RuntimeException('endpoint scaffold peer prune failed');
+        throw new \RuntimeException('policy-managed interface peer prune failed');
     }
 
     echo json_encode([
         'status' => 'ok',
-        'endpoint_count' => count($preparePayload['endpoints']),
-        'endpoint_changed' => !empty($prepared['changed']) || !empty($pruned['changed']),
+        'interface_count' => count($preparePayload['interfaces']),
+        'interface_changed' => !empty($prepared['changed']) || !empty($pruned['changed']),
     ]);
     echo PHP_EOL;
 } catch (\Throwable $error) {

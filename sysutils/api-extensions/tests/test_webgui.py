@@ -85,6 +85,54 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertIn("getForm('carpHealthCheck')", controller)
         self.assertIn("OPNsense/ApiExtensions/carp_health", controller)
 
+    def test_interface_policy_page_supports_direct_and_bulk_assignment(self):
+        menu = ET.parse(MVC / "models/OPNsense/ApiExtensions/Menu/Menu.xml").getroot()
+        item = menu.find("./System/HighAvailability/InterfacePolicies")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.attrib.get("url"), "/ui/api_extensions/interface_policy")
+
+        view = (MVC / "views/OPNsense/ApiExtensions/interface_policy.volt").read_text()
+        for marker in (
+            "grid-interface-policy-overview",
+            "UIBootgrid",
+            "interface-policy-row-policy",
+            "interface-policy-bulk-policy",
+            "btn-interface-policy-bulk-apply",
+            "btn-interface-policy-save-changes",
+            "btn-interface-policy-refresh",
+            "/searchOverview",
+            "/batchAssign",
+            "selectpicker",
+            "disableScroll: true",
+            "interface-policy-filter-container",
+            "interface-policy-filter",
+            "All policies",
+            "requestHandler",
+            "interface-policy-bulk-footer",
+            "interface-policy-selected-count",
+            "Discard unsaved changes?",
+        ):
+            self.assertIn(marker, view)
+        self.assertIn("insertBefore('#grid-interface-policy-overview-header .search')", view)
+        self.assertNotIn("interface-policy-bulk-footer').detach()", view)
+        self.assertNotIn("All locally configured interfaces have an explicit synchronization policy.", view)
+        self.assertNotIn("interface-policy-assignments-tab", view)
+        self.assertNotIn("interface-policy-save')", view)
+
+        controller = (MVC / "controllers/OPNsense/ApiExtensions/Api/InterfacePolicyController.php").read_text()
+        self.assertIn("function searchOverviewAction", controller)
+        self.assertIn("function assignAction", controller)
+        self.assertIn("function batchAssignAction", controller)
+        self.assertIn("private function resolvePolicyUuid", controller)
+        self.assertIn("HA peer replica %s is read-only", controller)
+        self.assertNotIn("Reassign it instead of deleting the assignment", controller)
+        self.assertIn("Terraform must remove the policy relation before deleting the core interface resource", controller)
+        self.assertIn("fail closed", controller)
+
+        page_controller = (MVC / "controllers/OPNsense/ApiExtensions/InterfacePolicyController.php").read_text()
+        self.assertIn("getForm('interfaceSyncPolicy')", page_controller)
+        self.assertNotIn("interfaceSyncAssignment", page_controller)
+
 
 if __name__ == "__main__":
     unittest.main()
