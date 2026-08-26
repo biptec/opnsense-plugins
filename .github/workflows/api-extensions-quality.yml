@@ -45,8 +45,14 @@ jobs:
       - name: Run validation tests
         run: php sysutils/api-extensions/tests/test_validation.php
 
+      - name: Run interface synchronization tests
+        run: php sysutils/api-extensions/tests/test_interface_sync.php
+
       - name: Run endpoint synchronization tests
         run: php sysutils/api-extensions/tests/test_endpoint_sync.php
+
+      - name: Run HAProxy policy synchronization tests
+        run: php sysutils/api-extensions/tests/test_haproxy_sync.php
 
       - name: Run CARP health tests
         run: python3 -m unittest sysutils/api-extensions/tests/test_carp_health.py

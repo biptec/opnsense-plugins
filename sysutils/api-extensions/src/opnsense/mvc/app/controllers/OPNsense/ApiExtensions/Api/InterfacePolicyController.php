@@ -2,6 +2,7 @@
 
 namespace OPNsense\ApiExtensions\Api;
 
+use OPNsense\ApiExtensions\HAProxySync;
 use OPNsense\ApiExtensions\InterfaceSync;
 use OPNsense\Base\ApiMutableModelControllerBase;
 use OPNsense\Core\Config;
@@ -45,7 +46,17 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
                 }
                 foreach (InterfaceSync::replicas($config) as $replica) {
                     if (($replica['policy_id'] ?? '') === $policyId) {
-                        return ['result' => 'failed', 'message' => 'Policy is used by an HA peer replica and cannot be deleted.'];
+                        return ['result' => 'failed', 'message' => 'Policy is used by an HA peer interface replica and cannot be deleted.'];
+                    }
+                }
+                foreach (HAProxySync::assignments($config) as $assignment) {
+                    if (($assignment['policy_id'] ?? '') === $policyId) {
+                        return ['result' => 'failed', 'message' => 'Policy is assigned to a local HAProxy object and cannot be deleted.'];
+                    }
+                }
+                foreach (HAProxySync::replicas($config) as $replica) {
+                    if (($replica['policy_id'] ?? '') === $policyId) {
+                        return ['result' => 'failed', 'message' => 'Policy is used by an HA peer HAProxy replica and cannot be deleted.'];
                     }
                 }
             }

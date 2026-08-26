@@ -552,7 +552,7 @@ final class InterfaceSync
         $root['replicas'] = self::serializeRows('replica', $rows);
     }
 
-    private static function reconcilePolicies(array &$config, array $payload, callable $uuidFactory): array
+    public static function reconcilePolicies(array &$config, array $payload, callable $uuidFactory): array
     {
         $current = [];
         foreach (self::policyRowsRaw($config) as $row) {
@@ -585,6 +585,42 @@ final class InterfaceSync
             }
             foreach (self::replicas($config) as $row) {
                 $references[$row['policy_id']] = true;
+            }
+
+            // The policy model is shared by interface and HAProxy object assignments. A policy
+            // may be local-only on the receiver yet still be referenced by a local HAProxy
+            // object, so interface synchronization must not prune it merely because there is no
+            // interface assignment using it.
+            $policyByReference = [];
+            foreach ($current as $id => $row) {
+                $policyByReference[$id] = $id;
+                $uuid = trim((string)($row['@attributes']['uuid'] ?? ''));
+                if ($uuid !== '') {
+                    $policyByReference[$uuid] = $id;
+                }
+            }
+            $root = self::modelRoot($config);
+            foreach ([
+                ['haproxy_assignments', 'assignment'],
+                ['haproxy_replicas', 'replica'],
+            ] as [$container, $item]) {
+                foreach (self::containerRows(
+                    $root[$container] ?? [],
+                    $item,
+                    'HAProxy policy reference container'
+                ) as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $reference = trim((string)($row['policy_id'] ?? ''));
+                    if ($reference === '') {
+                        continue;
+                    }
+                    if (!isset($policyByReference[$reference])) {
+                        self::fail('HAProxy object references unknown interface sync policy relation ' . $reference);
+                    }
+                    $references[$policyByReference[$reference]] = true;
+                }
             }
             foreach ($current as $id => $row) {
                 if (!isset($desired[$id]) && isset($references[$id])) {

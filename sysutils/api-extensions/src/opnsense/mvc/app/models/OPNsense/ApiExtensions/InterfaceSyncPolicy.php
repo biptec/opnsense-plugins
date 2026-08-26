@@ -32,6 +32,39 @@ class InterfaceSyncPolicy extends BaseModel
             }
         }
 
+        $haproxyAssignments = [];
+        foreach ($this->haproxy_assignments->assignment->iterateItems() as $assignment) {
+            $policyId = trim((string)$assignment->policy_id->getValue());
+            if ($policyId !== '' && !isset($policyReferences[$policyId])) {
+                $messages->appendMessage(new Message(
+                    gettext('The selected HA sync policy does not exist.'),
+                    $assignment->__reference . '.policy_id'
+                ));
+            }
+            $type = trim((string)$assignment->object_type->getValue());
+            $name = trim((string)$assignment->object_name->getValue());
+            if ($type !== '' && $name !== '') {
+                $key = $type . ':' . $name;
+                if (isset($haproxyAssignments[$key])) {
+                    $messages->appendMessage(new Message(
+                        gettext('Each HAProxy server or backend must have exactly one policy assignment.'),
+                        $assignment->__reference . '.object_name'
+                    ));
+                }
+                $haproxyAssignments[$key] = true;
+            }
+        }
+
+        foreach ($this->haproxy_replicas->replica->iterateItems() as $replica) {
+            $policyId = trim((string)$replica->policy_id->getValue());
+            if ($policyId !== '' && !isset($policyReferences[$policyId])) {
+                $messages->appendMessage(new Message(
+                    gettext('The HAProxy replica references a policy that does not exist.'),
+                    $replica->__reference . '.policy_id'
+                ));
+            }
+        }
+
         return $messages;
     }
 }

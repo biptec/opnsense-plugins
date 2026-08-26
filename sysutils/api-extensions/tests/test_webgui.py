@@ -85,11 +85,21 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertIn("getForm('carpHealthCheck')", controller)
         self.assertIn("OPNsense/ApiExtensions/carp_health", controller)
 
+    def test_haproxy_sync_transport_preserves_failure_details(self):
+        script = (ROOT / "src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php").read_text()
+        self.assertIn("$peerMessage", script)
+        self.assertIn("$haproxy['message']", script)
+        self.assertIn("'status' => 'failed'", script)
+        self.assertNotIn("exit(1);", script)
+
     def test_interface_policy_page_supports_direct_and_bulk_assignment(self):
         menu = ET.parse(MVC / "models/OPNsense/ApiExtensions/Menu/Menu.xml").getroot()
         item = menu.find("./System/HighAvailability/InterfacePolicies")
         self.assertIsNotNone(item)
         self.assertEqual(item.attrib.get("url"), "/ui/api_extensions/interface_policy")
+        acl = ET.parse(MVC / "models/OPNsense/ApiExtensions/ACL/ACL.xml").getroot()
+        patterns = [node.text for node in acl.findall(".//page-system-api-extensions-interface-policy/patterns/pattern")]
+        self.assertIn("api/api_extensions/haproxy_policy/*", patterns)
 
         view = (MVC / "views/OPNsense/ApiExtensions/interface_policy.volt").read_text()
         for marker in (
@@ -118,6 +128,46 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertNotIn("All locally configured interfaces have an explicit synchronization policy.", view)
         self.assertNotIn("interface-policy-assignments-tab", view)
         self.assertNotIn("interface-policy-save')", view)
+        self.assertIn("interface-policy-haproxy-tab", view)
+        self.assertIn("haproxy-policy-ha-status", view)
+        self.assertIn("partial('OPNsense/ApiExtensions/haproxy_policy')", view)
+
+        haproxy_view = (MVC / "views/OPNsense/ApiExtensions/haproxy_policy.volt").read_text()
+        for marker in (
+            "grid-haproxy-policy-overview",
+            "haproxy-policy-row-policy",
+            "haproxy-policy-filter-container",
+            "haproxy-policy-type-filter",
+            "haproxy-policy-bulk-policy",
+            "btn-haproxy-policy-bulk-apply",
+            "btn-haproxy-policy-save-changes",
+            "btn-haproxy-policy-refresh",
+            "haproxy-policy-delete-stale",
+            "Stale assignment",
+            "assignment_uuid",
+            "/delAssignment/",
+            "/api/api_extensions/haproxy_policy",
+            "/searchOverview",
+            "/batchAssign",
+            "disableScroll: true",
+            "Backend server references are rebuilt on the peer by semantic server name",
+        ):
+            self.assertIn(marker, haproxy_view)
+        self.assertIn("insertBefore('#grid-haproxy-policy-overview-header .search')", haproxy_view)
+        self.assertNotIn("PLACEHOLDER", haproxy_view)
+
+        haproxy_controller = (MVC / "controllers/OPNsense/ApiExtensions/Api/HaproxyPolicyController.php").read_text()
+        for marker in (
+            "function searchOverviewAction",
+            "function overviewAction",
+            "function assignAction",
+            "function batchAssignAction",
+            "HA peer replica %s is read-only",
+            "Missing HAProxy object",
+            "Policy assignment is stale",
+            "stale_assignments",
+        ):
+            self.assertIn(marker, haproxy_controller)
 
         controller = (MVC / "controllers/OPNsense/ApiExtensions/Api/InterfacePolicyController.php").read_text()
         self.assertIn("function searchOverviewAction", controller)
