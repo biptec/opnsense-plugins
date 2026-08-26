@@ -92,6 +92,18 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertIn("'status' => 'failed'", script)
         self.assertNotIn("exit(1);", script)
 
+    def test_ha_sync_policy_model_is_generic_but_backward_compatible(self):
+        generic_php = (MVC / "models/OPNsense/ApiExtensions/HASyncPolicy.php").read_text()
+        generic_xml = ET.parse(MVC / "models/OPNsense/ApiExtensions/HASyncPolicy.xml").getroot()
+        legacy_php = (MVC / "models/OPNsense/ApiExtensions/InterfaceSyncPolicy.php").read_text()
+        self.assertIn("class HASyncPolicy extends BaseModel", generic_php)
+        self.assertEqual(generic_xml.findtext("./mount"), "//OPNsense/ApiExtensions/InterfaceSyncPolicy")
+        self.assertIn("class InterfaceSyncPolicy extends HASyncPolicy", legacy_php)
+        for controller_name in ("InterfacePolicyController.php", "HaproxyPolicyController.php"):
+            controller = (MVC / "controllers/OPNsense/ApiExtensions/Api" / controller_name).read_text()
+            self.assertIn("HASyncPolicy", controller)
+            self.assertNotIn("internalModelClass = '\\\\OPNsense\\\\ApiExtensions\\\\InterfaceSyncPolicy'", controller)
+
     def test_interface_policy_page_supports_direct_and_bulk_assignment(self):
         menu = ET.parse(MVC / "models/OPNsense/ApiExtensions/Menu/Menu.xml").getroot()
         item = menu.find("./System/HighAvailability/InterfacePolicies")
@@ -109,7 +121,6 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             "interface-policy-bulk-policy",
             "btn-interface-policy-bulk-apply",
             "btn-interface-policy-save-changes",
-            "btn-interface-policy-refresh",
             "/searchOverview",
             "/batchAssign",
             "selectpicker",
@@ -131,6 +142,13 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertIn("interface-policy-haproxy-tab", view)
         self.assertIn("haproxy-policy-ha-status", view)
         self.assertIn("partial('OPNsense/ApiExtensions/haproxy_policy')", view)
+        self.assertEqual(item.attrib.get("VisibleName"), "HA Sync Policies")
+        self.assertIn("{{ lang._('Policies') }}", view)
+        self.assertIn("{{ lang._('Interfaces') }}", view)
+        self.assertNotIn("Interface Overview", view)
+        self.assertNotIn("btn-interface-policy-refresh", view)
+        self.assertIn("grid-interface-policy-overview-refresh-button", view)
+        self.assertIn("bindInterfaceNativeRefresh", view)
 
         haproxy_view = (MVC / "views/OPNsense/ApiExtensions/haproxy_policy.volt").read_text()
         for marker in (
@@ -141,7 +159,6 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             "haproxy-policy-bulk-policy",
             "btn-haproxy-policy-bulk-apply",
             "btn-haproxy-policy-save-changes",
-            "btn-haproxy-policy-refresh",
             "haproxy-policy-delete-stale",
             "Stale assignment",
             "assignment_uuid",
@@ -155,6 +172,9 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             self.assertIn(marker, haproxy_view)
         self.assertIn("insertBefore('#grid-haproxy-policy-overview-header .search')", haproxy_view)
         self.assertNotIn("PLACEHOLDER", haproxy_view)
+        self.assertNotIn("btn-haproxy-policy-refresh", haproxy_view)
+        self.assertIn("grid-haproxy-policy-overview-refresh-button", haproxy_view)
+        self.assertIn("bindHaproxyNativeRefresh", haproxy_view)
 
         haproxy_controller = (MVC / "controllers/OPNsense/ApiExtensions/Api/HaproxyPolicyController.php").read_text()
         for marker in (

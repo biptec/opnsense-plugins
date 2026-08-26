@@ -64,7 +64,7 @@ final class InterfaceSync
             return [];
         }
         if (!is_array($root)) {
-            self::fail('InterfaceSyncPolicy configuration must be an object');
+            self::fail('HA sync policy configuration must be an object');
         }
         return $root;
     }

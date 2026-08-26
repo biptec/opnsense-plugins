@@ -200,6 +200,7 @@ $(document).ready(function() {
         $('#grid-interface-policy-overview')
             .on('selected.rs.jquery.bootgrid deselected.rs.jquery.bootgrid loaded.rs.jquery.bootgrid', updateBulkState);
         $('#interface-policy-bulk-policy').on('changed.bs.select change', updateBulkState);
+        bindInterfaceNativeRefresh();
         updateBulkState();
     }
 
@@ -257,7 +258,7 @@ $(document).ready(function() {
             overviewGrid.bootgrid('reload');
         }
     });
-    $(document).on('click', '#btn-interface-policy-refresh', function() {
+    function refreshInterfacesSafely() {
         if (!Object.keys(pendingAssignments).length) {
             refreshOverview();
             return;
@@ -273,7 +274,13 @@ $(document).ready(function() {
                 refreshOverview();
             }
         );
-    });
+    }
+
+    function bindInterfaceNativeRefresh() {
+        $('#grid-interface-policy-overview-refresh-button')
+            .off('click')
+            .on('click', refreshInterfacesSafely);
+    }
     $(document).on('click', '#btn-interface-policy-bulk-apply', function() {
         const policyId = $('#interface-policy-bulk-policy').val();
         const selected = overviewGrid ? overviewGrid.bootgrid('getTable').getSelectedData() : [];
@@ -305,9 +312,9 @@ $(document).ready(function() {
 </div>
 
 <ul class="nav nav-tabs" data-tabs="tabs">
-    <li class="active"><a data-toggle="tab" href="#interface-policy-overview-tab">{{ lang._('Interface Overview') }}</a></li>
+    <li class="active"><a data-toggle="tab" href="#interface-policy-policies-tab">{{ lang._('Policies') }}</a></li>
+    <li><a data-toggle="tab" href="#interface-policy-overview-tab">{{ lang._('Interfaces') }}</a></li>
     <li><a data-toggle="tab" href="#interface-policy-haproxy-tab">{{ lang._('HAProxy Objects') }}</a></li>
-    <li><a data-toggle="tab" href="#interface-policy-policies-tab">{{ lang._('Policies') }}</a></li>
 </ul>
 
 <style>
@@ -392,7 +399,7 @@ $(document).ready(function() {
 </style>
 
 <div class="tab-content content-box">
-    <div id="interface-policy-overview-tab" class="tab-pane fade in active">
+    <div id="interface-policy-overview-tab" class="tab-pane fade">
         <div class="hidden">
             <div id="interface-policy-filter-container" class="btn-group">
                 <select id="interface-policy-filter"
@@ -453,17 +460,13 @@ $(document).ready(function() {
                     <i class="fa fa-fw fa-save"></i>
                     {{ lang._('Save changes') }}
                 </button>
-                <button id="btn-interface-policy-refresh" type="button" class="btn btn-default __mr">
-                    <i class="fa fa-fw fa-refresh"></i>
-                    {{ lang._('Refresh') }}
-                </button>
                 <div id="interface-policy-pending-count" style="display:none;"></div>
             </div>
         </section>
 
         <div class="interface-policy-help">
             <p class="help-block">
-                {{ lang._('Interface policy is the explicit source of truth for VLAN/interface HA behavior. Interface names and creators do not select synchronization. The standard High Availability page separately enables the Policy-managed Interfaces / VLANs synchronization service.') }}
+                {{ lang._('HA sync policies are the explicit source of truth for synchronized objects. Interfaces and HAProxy objects select a policy directly; names, creators and prefixes do not select synchronization. The standard High Availability page separately enables each policy-managed synchronization service.') }}
             </p>
             <div id="interface-policy-warning" class="alert alert-warning" style="display:none;"></div>
         </div>
@@ -471,7 +474,7 @@ $(document).ready(function() {
 
     {{ partial('OPNsense/ApiExtensions/haproxy_policy') }}
 
-    <div id="interface-policy-policies-tab" class="tab-pane fade">
+    <div id="interface-policy-policies-tab" class="tab-pane fade in active">
         <table id="grid-interface-sync-policies" class="table table-condensed table-hover table-striped table-responsive" data-editDialog="DialogInterfaceSyncPolicy">
             <thead><tr>
                 <th data-column-id="id" data-type="string">{{ lang._('Policy ID') }}</th>
@@ -487,4 +490,4 @@ $(document).ready(function() {
 
 </div>
 
-{{ partial('layout_partials/base_dialog', ['fields': policyForm, 'id': 'DialogInterfaceSyncPolicy', 'label': lang._('Interface Sync Policy')]) }}
+{{ partial('layout_partials/base_dialog', ['fields': policyForm, 'id': 'DialogInterfaceSyncPolicy', 'label': lang._('HA Sync Policy')]) }}

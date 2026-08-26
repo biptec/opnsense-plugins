@@ -9,7 +9,7 @@ use OPNsense\Core\Config;
 
 class HaproxyPolicyController extends ApiMutableModelControllerBase
 {
-    protected static $internalModelClass = '\\OPNsense\\ApiExtensions\\InterfaceSyncPolicy';
+    protected static $internalModelClass = '\\OPNsense\\ApiExtensions\\HASyncPolicy';
     protected static $internalModelName = 'interface_sync_policy';
 
     private function resolvePolicyUuid(string $reference, array $policies): ?string

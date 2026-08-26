@@ -354,6 +354,21 @@ bad(
     'receiver-only policy definitions are rejected while referenced; policy definitions remain source-authoritative'
 );
 
+$nativeEmpty = receiverBase();
+$nativeEmpty['OPNsense']['HAProxy']['servers'] = [];
+$nativeEmpty['OPNsense']['HAProxy']['backends'] = '';
+$nativeEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments'] = '';
+$nativeEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_replicas'] = '';
+$nativeEmptyResult = HAProxySync::reconcile(
+    $nativeEmpty,
+    $emptyPayload,
+    fn() => throw new RuntimeException('native-empty UUID factory should not run'),
+    fn() => throw new RuntimeException('native-empty id factory should not run')
+);
+eq(false, $nativeEmptyResult['changed'], 'native empty HAProxy section shapes remain a true no-op');
+eq([], $nativeEmptyResult['config']['OPNsense']['HAProxy']['servers'], 'native empty server array shape is preserved');
+eq('', $nativeEmptyResult['config']['OPNsense']['HAProxy']['backends'], 'native empty backend string shape is preserved');
+
 $serializedEmpty = receiverBase();
 $serializedEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_replicas'] = '';
 $serializedCreate = HAProxySync::reconcile($serializedEmpty, $payload, nextFactory('serialized-uuid-'), nextFactory('serialized-id-'));

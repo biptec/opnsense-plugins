@@ -9,7 +9,7 @@ use OPNsense\Core\Config;
 
 class InterfacePolicyController extends ApiMutableModelControllerBase
 {
-    protected static $internalModelClass = '\\OPNsense\\ApiExtensions\\InterfaceSyncPolicy';
+    protected static $internalModelClass = '\\OPNsense\\ApiExtensions\\HASyncPolicy';
     protected static $internalModelName = 'interface_sync_policy';
 
     public function searchPolicyAction()
