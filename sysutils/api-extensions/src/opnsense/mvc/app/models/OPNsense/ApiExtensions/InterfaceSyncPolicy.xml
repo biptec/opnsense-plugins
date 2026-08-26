@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/ApiExtensions/InterfaceSyncPolicy</mount>
-    <description>HA interface synchronization policies and assignments</description>
-    <version>1.0.0</version>
+    <description>HA synchronization policies and object assignments</description>
+    <version>1.1.0</version>
     <items>
         <sync_marker>
             <enabled type="BooleanField">
@@ -9,6 +9,12 @@
                 <Required>Y</Required>
             </enabled>
         </sync_marker>
+        <haproxy_sync_marker>
+            <enabled type="BooleanField">
+                <Default>1</Default>
+                <Required>Y</Required>
+            </enabled>
+        </haproxy_sync_marker>
         <shared>
             <policies>
                 <policy type="ArrayField">
@@ -68,5 +74,51 @@
                 </policy_id>
             </replica>
         </replicas>
+        <haproxy_assignments>
+            <assignment type="ArrayField">
+                <object_type type="OptionField">
+                    <Required>Y</Required>
+                    <OptionValues>
+                        <server>Server</server>
+                        <backend>Backend</backend>
+                    </OptionValues>
+                </object_type>
+                <object_name type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^([0-9a-zA-Z._\-]){1,255}$/u</Mask>
+                    <ValidationMessage>Use the exact HAProxy server or backend name.</ValidationMessage>
+                </object_name>
+                <policy_id type="ModelRelationField">
+                    <Required>Y</Required>
+                    <Model>
+                        <template>
+                            <source>OPNsense.ApiExtensions.InterfaceSyncPolicy</source>
+                            <items>shared.policies.policy</items>
+                            <display>id</display>
+                        </template>
+                    </Model>
+                    <ValidationMessage>Select an existing HA sync policy.</ValidationMessage>
+                </policy_id>
+            </assignment>
+        </haproxy_assignments>
+        <haproxy_replicas>
+            <replica type="ArrayField">
+                <object_type type="OptionField">
+                    <Required>Y</Required>
+                    <OptionValues>
+                        <server>Server</server>
+                        <backend>Backend</backend>
+                    </OptionValues>
+                </object_type>
+                <object_name type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^([0-9a-zA-Z._\-]){1,255}$/u</Mask>
+                </object_name>
+                <policy_id type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^[a-z][a-z0-9_-]{0,31}$/</Mask>
+                </policy_id>
+            </replica>
+        </haproxy_replicas>
     </items>
 </model>

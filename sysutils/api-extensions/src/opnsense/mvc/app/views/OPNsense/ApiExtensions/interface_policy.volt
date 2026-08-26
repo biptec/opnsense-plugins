@@ -297,12 +297,16 @@ $(document).ready(function() {
 </script>
 
 <div class="interface-policy-statusbar">
-    <strong>{{ lang._('HA interface synchronization service') }}</strong>
+    <strong>{{ lang._('HA synchronization services') }}</strong>
+    <span>{{ lang._('Interfaces / VLANs') }}</span>
     <span id="interface-policy-ha-status" class="label label-default">Unknown</span>
+    <span>{{ lang._('HAProxy Objects') }}</span>
+    <span id="haproxy-policy-ha-status" class="label label-default">Unknown</span>
 </div>
 
 <ul class="nav nav-tabs" data-tabs="tabs">
     <li class="active"><a data-toggle="tab" href="#interface-policy-overview-tab">{{ lang._('Interface Overview') }}</a></li>
+    <li><a data-toggle="tab" href="#interface-policy-haproxy-tab">{{ lang._('HAProxy Objects') }}</a></li>
     <li><a data-toggle="tab" href="#interface-policy-policies-tab">{{ lang._('Policies') }}</a></li>
 </ul>
 
@@ -464,6 +468,8 @@ $(document).ready(function() {
             <div id="interface-policy-warning" class="alert alert-warning" style="display:none;"></div>
         </div>
     </div>
+
+    {{ partial('OPNsense/ApiExtensions/haproxy_policy') }}
 
     <div id="interface-policy-policies-tab" class="tab-pane fade">
         <table id="grid-interface-sync-policies" class="table table-condensed table-hover table-striped table-responsive" data-editDialog="DialogInterfaceSyncPolicy">
