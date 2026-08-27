@@ -17,6 +17,8 @@ try {
 
     $interfaceEnabled = InterfaceSync::isEnabled($config);
     $haproxyEnabled = HAProxySync::isEnabled($config);
+    $syncItems = array_filter(array_map('trim', explode(',', (string)($config['hasync']['syncitems'] ?? ''))));
+    $usersSelected = in_array('users', $syncItems, true);
     if (!$interfaceEnabled && !$haproxyEnabled) {
         throw new \RuntimeException('no policy-managed HA synchronization service is enabled');
     }
@@ -46,6 +48,18 @@ try {
         throw new \RuntimeException(sprintf('standard HA configuration synchronization failed with exit status %d', $status));
     }
 
+    // Native Users & Groups synchronization updates the receiver config.xml, but this
+    // selective path deliberately skips the global restart_services sweep. Materialize
+    // synchronized users by restarting only the peer's native login pseudo-service.
+    $usersReconciled = false;
+    if ($usersSelected) {
+        $loginResult = xmlrpc_execute('opnsense.restart_service', ['service' => 'login', 'id' => '']);
+        if (!is_string($loginResult) || trim($loginResult) === '') {
+            throw new \RuntimeException('peer Users and Groups login reconciliation returned an invalid response');
+        }
+        $usersReconciled = true;
+    }
+
     $pruned = ['changed' => false];
     if ($interfaceEnabled) {
         $pruned = xmlrpc_execute('opnsense.api_extensions_sync_interfaces', $prunePayload);
@@ -72,6 +86,7 @@ try {
         'interface_changed' => !empty($prepared['changed']) || !empty($pruned['changed']),
         'haproxy_count' => $haproxyEnabled ? count($haproxyPayload['objects']) : 0,
         'haproxy_changed' => !empty($haproxy['changed']),
+        'users_reconciled' => $usersReconciled,
     ]);
     echo PHP_EOL;
 } catch (\Throwable $error) {

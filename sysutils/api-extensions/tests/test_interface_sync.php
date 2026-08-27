@@ -236,5 +236,8 @@ eq(true, str_contains($pushScript, 'buildPayload($config, true)'), 'push prunes 
 eq(true, str_contains($pushScript, 'api_extensions_sync_interfaces'), 'push uses generic interface sync RPC');
 eq(true, str_contains($pushScript, "exec('/usr/local/etc/rc.filter_synchronize 2>&1'"), 'push uses native HA sync without global service restarts');
 eq(false, str_contains($pushScript, 'rc.filter_synchronize restart_services'), 'push must not restart configd and every remote service');
+eq(true, str_contains($pushScript, "in_array('users', \$syncItems, true)"), 'push detects native Users and Groups selection');
+eq(true, str_contains($pushScript, "xmlrpc_execute('opnsense.restart_service', ['service' => 'login', 'id' => ''])"), 'users sync reconciles only the receiver login pseudo-service');
+eq(true, str_contains($pushScript, "'users_reconciled' => \$usersReconciled"), 'push reports receiver user materialization');
 
 fwrite(STDOUT, "interface policy sync tests passed\n");
