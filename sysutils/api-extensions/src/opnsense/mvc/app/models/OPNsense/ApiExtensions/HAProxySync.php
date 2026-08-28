@@ -122,7 +122,15 @@ final class HAProxySync
         // single canonical shape here would make every subsequent sync appear
         // changed even though all object data and UUIDs are identical.
         if (is_array($current) && array_is_list($current)) {
-            $wrapped = $current !== [];
+            // An empty array carries no information about the persisted row
+            // wrapper shape. Start from the canonical item container instead
+            // of emitting raw rows. Raw rows would serialize a first server as
+            // <servers uuid="..."> rather than <servers><server ...>, which the
+            // native HAProxy MVC model does not recognize.
+            if ($current === []) {
+                return self::serializeRows($item, $rows);
+            }
+            $wrapped = true;
             foreach ($current as $entry) {
                 if (!is_array($entry) || !array_key_exists($item, $entry)) {
                     $wrapped = false;
@@ -132,7 +140,10 @@ final class HAProxySync
             if ($wrapped) {
                 return array_map(fn($row) => [$item => $row], $rows);
             }
-            return $rows;
+            // A direct row list is accepted on read for defensive recovery, but
+            // it is not a valid native MVC persistence shape. Canonicalize it
+            // on the next reconciliation so an already malformed peer heals.
+            return self::serializeRows($item, $rows);
         }
 
         if (is_array($current) && !array_is_list($current) && !array_key_exists($item, $current)) {

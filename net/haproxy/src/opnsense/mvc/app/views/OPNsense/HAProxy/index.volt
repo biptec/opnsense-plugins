@@ -35,6 +35,19 @@ POSSIBILITY OF SUCH DAMAGE.
         // get general HAProxy settings
         const data_get_map = {'frm_haproxy':"/api/haproxy/settings/get"};
 
+        function refreshHAPolicyStatus() {
+            ajaxGet('/api/api_extensions/haproxy_policy/overview', {}, function(data) {
+                const badges = $('.haproxy-ha-policy-status');
+                if (!data || data.status !== 'ok') {
+                    badges.removeClass('label-success label-default').addClass('label-danger').text('{{ lang._("Unavailable") }}');
+                    return;
+                }
+                badges.removeClass('label-danger label-success label-default')
+                    .addClass(data.ha_service_enabled ? 'label-success' : 'label-default')
+                    .text(data.ha_service_enabled ? '{{ lang._("Enabled") }}' : '{{ lang._("Disabled") }}');
+            });
+        }
+
         // load initial data
         mapDataToFormUI(data_get_map).done(function(){
             formatTokenizersUI();
@@ -44,6 +57,8 @@ POSSIBILITY OF SUCH DAMAGE.
                 updateServiceStatusUI(data['status']);
             });
         });
+        refreshHAPolicyStatus();
+        $(document).on('settings-changed', refreshHAPolicyStatus);
 
         /***********************************************************************
          * link grid actions
@@ -779,6 +794,10 @@ POSSIBILITY OF SUCH DAMAGE.
     </div>
 
     <div id="backends" class="tab-pane fade">
+        <div class="haproxy-ha-policy-statusbar" style="display:flex; align-items:center; gap:8px; margin-bottom:10px; min-height:24px;">
+            <strong>{{ lang._('HA synchronization') }}</strong>
+            <span class="haproxy-ha-policy-status label label-default">{{ lang._('Unknown') }}</span>
+        </div>
         <table id="grid-backends" class="table table-condensed table-hover table-striped table-responsive" data-editDialog="DialogBackend" data-editAlert="haproxyChangeMessage">
             <thead>
             <tr>
@@ -786,6 +805,7 @@ POSSIBILITY OF SUCH DAMAGE.
                 <th data-column-id="backendid" data-type="number"  data-visible="false">{{ lang._('Backend Pool ID') }}</th>
                 <th data-column-id="name" data-type="string">{{ lang._('Backend Pool Name') }}</th>
                 <th data-column-id="description" data-type="string">{{ lang._('Description') }}</th>
+                <th data-column-id="ha_policy" data-type="string">{{ lang._('HA Policy') }}</th>
                 <th data-column-id="commands" data-width="7em" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
                 <th data-column-id="uuid" data-type="string" data-identifier="true"  data-visible="false">{{ lang._('ID') }}</th>
             </tr>
@@ -805,6 +825,10 @@ POSSIBILITY OF SUCH DAMAGE.
     </div>
 
     <div id="servers" class="tab-pane fade">
+        <div class="haproxy-ha-policy-statusbar" style="display:flex; align-items:center; gap:8px; margin-bottom:10px; min-height:24px;">
+            <strong>{{ lang._('HA synchronization') }}</strong>
+            <span class="haproxy-ha-policy-status label label-default">{{ lang._('Unknown') }}</span>
+        </div>
         <table id="grid-servers" class="table table-condensed table-hover table-striped table-responsive" data-editDialog="DialogServer" data-editAlert="haproxyChangeMessage">
             <thead>
             <tr>
@@ -816,6 +840,7 @@ POSSIBILITY OF SUCH DAMAGE.
                 <th data-column-id="address" data-type="string">{{ lang._('Server Address') }}</th>
                 <th data-column-id="port" data-type="string">{{ lang._('Server Port') }}</th>
                 <th data-column-id="description" data-type="string">{{ lang._('Description') }}</th>
+                <th data-column-id="ha_policy" data-type="string">{{ lang._('HA Policy') }}</th>
                 <th data-column-id="commands" data-width="7em" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
                 <th data-column-id="uuid" data-type="string" data-identifier="true"  data-visible="false">{{ lang._('ID') }}</th>
             </tr>

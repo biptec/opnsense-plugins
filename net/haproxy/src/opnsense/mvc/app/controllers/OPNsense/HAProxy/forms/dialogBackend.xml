@@ -18,6 +18,13 @@
         <help>Description for this Backend Pool.</help>
     </field>
     <field>
+        <id>backend.ha_policy</id>
+        <label>HA Policy</label>
+        <type>dropdown</type>
+        <style>ha_policy_field</style>
+        <help>Select the High Availability policy for this Backend Pool. A synchronized backend may only reference Real Servers that are also selected for synchronization.</help>
+    </field>
+    <field>
         <id>backend.mode</id>
         <label>Mode</label>
         <type>dropdown</type>
