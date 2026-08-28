@@ -226,18 +226,17 @@ bad(fn()=>InterfaceSync::validatePayload([
 ]), 'non canonical device rejected');
 
 $hook = file_get_contents(__DIR__ . '/../src/etc/inc/plugins.inc.d/api_extensions.inc');
-eq(true, str_contains($hook, "'id' => 'interface_vlans'"), 'custom service registered in standard HA selector');
-eq(true, str_contains($hook, 'InterfaceSyncPolicy.sync_marker'), 'native HA checkbox uses a harmless marker while policy rows preserve peer UUID ownership');
+eq(true, str_contains($hook, "'id' => 'interface_vlans'"), 'Interfaces sync item registered in standard HA selector');
+eq(true, str_contains($hook, "gettext('Interfaces')"), 'Interfaces uses the generic native HA display name');
+eq(false, str_contains($hook, 'InterfaceSyncPolicy.sync_marker'), 'custom sync item no longer depends on a fake config section marker');
+eq(true, str_contains($hook, "'sync_validate' => 'api_extensions_interface_sync_validate'"), 'interface sync validates before peer mutation');
+eq(true, str_contains($hook, "'sync_prepare' => 'api_extensions_interface_sync_prepare'"), 'interface sync prepares peer scaffolding before native sections');
+eq(true, str_contains($hook, "'sync_finalize' => 'api_extensions_interface_sync_finalize'"), 'interface sync prunes peer scaffolding after native sections');
+eq(true, str_contains($hook, "'id' => 'haproxy_objects'"), 'HAProxy Objects sync item registered in standard HA selector');
+eq(true, str_contains($hook, "gettext('HAProxy Objects')"), 'HAProxy Objects uses the native Status/Settings display name');
+eq(true, str_contains($hook, "'sync_finalize' => 'api_extensions_haproxy_sync_finalize'"), 'HAProxy object synchronization is a native HA finalizer');
 
-$pushScript = file_get_contents(__DIR__ . '/../src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php');
-eq(false, str_contains($pushScript, 'pre_check_master'), 'static primary config authority must not depend on CARP master state');
-eq(true, str_contains($pushScript, 'buildPayload($config, false)'), 'push prepares scaffold before native sync');
-eq(true, str_contains($pushScript, 'buildPayload($config, true)'), 'push prunes scaffold after native sync');
-eq(true, str_contains($pushScript, 'api_extensions_sync_interfaces'), 'push uses generic interface sync RPC');
-eq(true, str_contains($pushScript, "exec('/usr/local/etc/rc.filter_synchronize 2>&1'"), 'push uses native HA sync without global service restarts');
-eq(false, str_contains($pushScript, 'rc.filter_synchronize restart_services'), 'push must not restart configd and every remote service');
-eq(true, str_contains($pushScript, "in_array('users', \$syncItems, true)"), 'push detects native Users and Groups selection');
-eq(true, str_contains($pushScript, "xmlrpc_execute('opnsense.restart_service', ['service' => 'login', 'id' => ''])"), 'users sync reconciles only the receiver login pseudo-service');
-eq(true, str_contains($pushScript, "'users_reconciled' => \$usersReconciled"), 'push reports receiver user materialization');
+eq(false, file_exists(__DIR__ . '/../src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php'), 'parallel config sync script removed');
+eq(false, file_exists(__DIR__ . '/../src/opnsense/mvc/app/controllers/OPNsense/ApiExtensions/Api/InterfaceSyncController.php'), 'parallel interface sync API controller removed');
 
 fwrite(STDOUT, "interface policy sync tests passed\n");
