@@ -85,12 +85,17 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertIn("getForm('carpHealthCheck')", controller)
         self.assertIn("OPNsense/ApiExtensions/carp_health", controller)
 
-    def test_haproxy_sync_transport_preserves_failure_details(self):
-        script = (ROOT / "src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php").read_text()
-        self.assertIn("$peerMessage", script)
-        self.assertIn("$haproxy['message']", script)
-        self.assertIn("'status' => 'failed'", script)
-        self.assertNotIn("exit(1);", script)
+    def test_custom_ha_items_extend_native_sync_instead_of_exposing_parallel_push_api(self):
+        hook = (ROOT / "src/etc/inc/plugins.inc.d/api_extensions.inc").read_text()
+        self.assertIn("gettext('Interfaces')", hook)
+        self.assertIn("gettext('HAProxy Objects')", hook)
+        self.assertIn("sync_validate", hook)
+        self.assertIn("sync_prepare", hook)
+        self.assertIn("sync_finalize", hook)
+        self.assertIn("api_extensions_sync_interfaces", hook)
+        self.assertIn("api_extensions_sync_haproxy", hook)
+        self.assertFalse((ROOT / "src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php").exists())
+        self.assertFalse((MVC / "controllers/OPNsense/ApiExtensions/Api/InterfaceSyncController.php").exists())
 
     def test_ha_sync_policy_model_is_generic_but_backward_compatible(self):
         generic_php = (MVC / "models/OPNsense/ApiExtensions/HASyncPolicy.php").read_text()
