@@ -222,6 +222,19 @@ $idempotent = HAProxySync::reconcile(
 );
 eq(false, $idempotent['changed'], 'second sync is idempotent');
 
+$malformedDirectList = $createdConfig;
+$malformedDirectList['OPNsense']['HAProxy']['servers'] = [$serverRows[0]];
+$malformedDirectList['OPNsense']['HAProxy']['backends'] = [$backendRows[0]];
+$healedDirectList = HAProxySync::reconcile(
+    $malformedDirectList,
+    $payload,
+    fn() => throw new RuntimeException('healing direct-list UUID factory should not run'),
+    fn() => throw new RuntimeException('healing direct-list id factory should not run')
+);
+eq(true, $healedDirectList['changed'], 'malformed direct-list persistence shape is repaired');
+eq(true, isset($healedDirectList['config']['OPNsense']['HAProxy']['servers']['server']), 'malformed server list is canonicalized');
+eq(true, isset($healedDirectList['config']['OPNsense']['HAProxy']['backends']['backend']), 'malformed backend list is canonicalized');
+
 $persistedShape = $createdConfig;
 $persistedShape['OPNsense']['HAProxy']['servers'] = [[
     'server' => $serverRows[0],
@@ -368,6 +381,24 @@ $nativeEmptyResult = HAProxySync::reconcile(
 eq(false, $nativeEmptyResult['changed'], 'native empty HAProxy section shapes remain a true no-op');
 eq([], $nativeEmptyResult['config']['OPNsense']['HAProxy']['servers'], 'native empty server array shape is preserved');
 eq('', $nativeEmptyResult['config']['OPNsense']['HAProxy']['backends'], 'native empty backend string shape is preserved');
+
+// A freshly installed peer can expose an empty ArrayField container as [].
+// The first synchronized object must still be wrapped under its singular MVC
+// item name; otherwise write_config() creates <servers uuid="..."> and native
+// HAProxy ignores the object even though the custom inventory can parse it.
+$emptyArrayCreate = receiverBase();
+$emptyArrayCreate['OPNsense']['HAProxy']['servers'] = [];
+$emptyArrayCreate['OPNsense']['HAProxy']['backends'] = [];
+$emptyArrayResult = HAProxySync::reconcile(
+    $emptyArrayCreate,
+    $payload,
+    nextFactory('empty-array-uuid-'),
+    nextFactory('empty-array-id-')
+);
+eq(true, isset($emptyArrayResult['config']['OPNsense']['HAProxy']['servers']['server']), 'first server uses native MVC item container');
+eq(true, isset($emptyArrayResult['config']['OPNsense']['HAProxy']['backends']['backend']), 'first backend uses native MVC item container');
+eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['servers'], 'server')), 'native MVC sees first synchronized server');
+eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['backends'], 'backend')), 'native MVC sees first synchronized backend');
 
 $serializedEmpty = receiverBase();
 $serializedEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_replicas'] = '';

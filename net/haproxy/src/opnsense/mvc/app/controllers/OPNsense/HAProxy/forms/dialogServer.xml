@@ -18,6 +18,13 @@
         <help>Description for this server.</help>
     </field>
     <field>
+        <id>server.ha_policy</id>
+        <label>HA Policy</label>
+        <type>dropdown</type>
+        <style>ha_policy_field</style>
+        <help>Select the High Availability policy for this Real Server. The policy determines whether this object is synchronized to the HA peer.</help>
+    </field>
+    <field>
         <id>server.type</id>
         <label>Type</label>
         <type>dropdown</type>

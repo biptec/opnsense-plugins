@@ -46,6 +46,120 @@ class SettingsController extends ApiMutableModelControllerBase
     protected static $internalModelClass = '\OPNsense\HAProxy\HAProxy';
     protected static $internalModelUseSafeDelete = true;
 
+    private function hasPolicyManager(): bool
+    {
+        return class_exists('\\OPNsense\\ApiExtensions\\PolicyAssignmentManager');
+    }
+
+    private function policyPayload(string $root): ?string
+    {
+        if (!$this->hasPolicyManager() || !$this->request->isPost() || !$this->request->hasPost($root)) {
+            return null;
+        }
+        $payload = $this->request->getPost($root);
+        if (!is_array($payload) || !array_key_exists('ha_policy', $payload)) {
+            return null;
+        }
+        return trim((string)$payload['ha_policy']);
+    }
+
+    private function validatePolicyPayload(string $root): ?array
+    {
+        $policy = $this->policyPayload($root);
+        if ($policy === null) {
+            return null;
+        }
+        try {
+            \OPNsense\ApiExtensions\PolicyAssignmentManager::validatePolicy($policy);
+        } catch (\Throwable $error) {
+            return [
+                'result' => 'failed',
+                'validations' => [
+                    $root . '.ha_policy' => $error->getMessage()
+                ]
+            ];
+        }
+        return null;
+    }
+
+    private function objectName(string $type, string $uuid): string
+    {
+        $path = $type === 'server' ? 'servers.server.' : 'backends.backend.';
+        $node = $this->getModel()->getNodeByReference($path . $uuid);
+        return $node === null ? '' : trim((string)$node->name->getValue());
+    }
+
+    private function policyState(string $type, string $name): array
+    {
+        if (!$this->hasPolicyManager() || $name === '') {
+            return [
+                'policy_id' => '',
+                'policy_description' => '',
+                'synchronize' => false,
+                'owner' => 'unassigned',
+                'ha_service_enabled' => false,
+            ];
+        }
+        return \OPNsense\ApiExtensions\PolicyAssignmentManager::haproxyState($type, $name);
+    }
+
+    private function enrichPolicyGet(array $result, string $root, string $type): array
+    {
+        if (!isset($result[$root]) || !is_array($result[$root])) {
+            return $result;
+        }
+        $state = $this->policyState($type, trim((string)($result[$root]['name'] ?? '')));
+        $options = [];
+        if ($this->hasPolicyManager()) {
+            foreach (\OPNsense\ApiExtensions\PolicyAssignmentManager::policies() as $policy) {
+                $label = $policy['id'];
+                if (!empty($policy['description'])) {
+                    $label .= ' — ' . $policy['description'];
+                }
+                $options[$policy['id']] = [
+                    'value' => $label,
+                    'selected' => $policy['id'] === $state['policy_id'] ? 1 : 0,
+                ];
+            }
+        }
+        $result[$root]['ha_policy'] = $options;
+        $result[$root]['ha_owner'] = $state['owner'];
+        $result[$root]['ha_synchronize'] = $state['synchronize'] ? '1' : '0';
+        return $result;
+    }
+
+    private function enrichPolicySearch(array $result, string $type): array
+    {
+        if (!isset($result['rows']) || !is_array($result['rows'])) {
+            return $result;
+        }
+        foreach ($result['rows'] as &$row) {
+            $state = $this->policyState($type, trim((string)($row['name'] ?? '')));
+            $row['ha_policy'] = $state['policy_id'];
+            $row['ha_owner'] = $state['owner'];
+            $row['ha_synchronize'] = $state['synchronize'] ? '1' : '0';
+        }
+        unset($row);
+        return $result;
+    }
+
+    private function readonlyReplica(string $type, string $name, string $root): ?array
+    {
+        if (!$this->hasPolicyManager() || $name === '') {
+            return null;
+        }
+        $state = $this->policyState($type, $name);
+        if ($state['owner'] !== 'ha_peer') {
+            return null;
+        }
+        return [
+            'result' => 'failed',
+            'validations' => [
+                $root . '.ha_policy' => gettext('This object is an HA peer replica and is read-only on this node.')
+            ]
+        ];
+    }
+
     public function getFrontendAction($uuid = null)
     {
         return $this->getBase('frontend', 'frontends.frontend', $uuid);
@@ -78,62 +192,186 @@ class SettingsController extends ApiMutableModelControllerBase
 
     public function getBackendAction($uuid = null)
     {
-        return $this->getBase('backend', 'backends.backend', $uuid);
+        return $this->enrichPolicyGet($this->getBase('backend', 'backends.backend', $uuid), 'backend', 'backend');
     }
 
     public function setBackendAction($uuid)
     {
-        return $this->setBase('backend', 'backends.backend', $uuid);
+        $oldName = $this->objectName('backend', $uuid);
+        if (($readonly = $this->readonlyReplica('backend', $oldName, 'backend')) !== null) {
+            return $readonly;
+        }
+        if (($validation = $this->validatePolicyPayload('backend')) !== null) {
+            return $validation;
+        }
+        $payload = $this->request->hasPost('backend') ? $this->request->getPost('backend') : [];
+        $newName = is_array($payload) && !empty($payload['name']) ? trim((string)$payload['name']) : $oldName;
+        $policy = $this->policyPayload('backend');
+        $result = $this->setBase('backend', 'backends.backend', $uuid);
+        if (($result['result'] ?? '') === 'saved' && $this->hasPolicyManager()) {
+            try {
+                if ($policy !== null) {
+                    \OPNsense\ApiExtensions\PolicyAssignmentManager::setHAProxy('backend', $newName, $policy, $oldName);
+                } else {
+                    \OPNsense\ApiExtensions\PolicyAssignmentManager::renameHAProxy('backend', $oldName, $newName);
+                }
+            } catch (\Throwable $error) {
+                return ['result' => 'failed', 'validations' => ['backend.ha_policy' => $error->getMessage()]];
+            }
+        }
+        return $result;
     }
 
     public function addBackendAction()
     {
-        return $this->addBase('backend', 'backends.backend');
+        if (($validation = $this->validatePolicyPayload('backend')) !== null) {
+            return $validation;
+        }
+        $payload = $this->request->hasPost('backend') ? $this->request->getPost('backend') : [];
+        $name = is_array($payload) ? trim((string)($payload['name'] ?? '')) : '';
+        $policy = $this->policyPayload('backend');
+        $result = $this->addBase('backend', 'backends.backend');
+        if (($result['result'] ?? '') === 'saved' && $policy !== null && $this->hasPolicyManager()) {
+            try {
+                \OPNsense\ApiExtensions\PolicyAssignmentManager::setHAProxy('backend', $name, $policy);
+            } catch (\Throwable $error) {
+                if (!empty($result['uuid'])) {
+                    $this->delBase('backends.backend', $result['uuid']);
+                }
+                return ['result' => 'failed', 'validations' => ['backend.ha_policy' => $error->getMessage()]];
+            }
+        }
+        return $result;
     }
 
     public function delBackendAction($uuid)
     {
-        return $this->delBase('backends.backend', $uuid);
+        $names = [];
+        foreach (explode(',', (string)$uuid) as $itemUuid) {
+            $name = $this->objectName('backend', trim($itemUuid));
+            if (($readonly = $this->readonlyReplica('backend', $name, 'backend')) !== null) {
+                return $readonly;
+            }
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+        $result = $this->delBase('backends.backend', $uuid);
+        if (($result['result'] ?? '') === 'deleted' && $this->hasPolicyManager()) {
+            foreach ($names as $name) {
+                \OPNsense\ApiExtensions\PolicyAssignmentManager::removeHAProxy('backend', $name);
+            }
+        }
+        return $result;
     }
 
     public function toggleBackendAction($uuid, $enabled = null)
     {
+        $name = $this->objectName('backend', $uuid);
+        if (($readonly = $this->readonlyReplica('backend', $name, 'backend')) !== null) {
+            return $readonly;
+        }
         return $this->toggleBase('backends.backend', $uuid);
     }
 
     public function searchBackendsAction()
     {
-        return $this->searchBase('backends.backend', array('enabled', 'name', 'description'), 'name');
+        return $this->enrichPolicySearch(
+            $this->searchBase('backends.backend', array('enabled', 'name', 'description'), 'name'),
+            'backend'
+        );
     }
 
     public function getServerAction($uuid = null)
     {
-        return $this->getBase('server', 'servers.server', $uuid);
+        return $this->enrichPolicyGet($this->getBase('server', 'servers.server', $uuid), 'server', 'server');
     }
 
     public function setServerAction($uuid)
     {
-        return $this->setBase('server', 'servers.server', $uuid);
+        $oldName = $this->objectName('server', $uuid);
+        if (($readonly = $this->readonlyReplica('server', $oldName, 'server')) !== null) {
+            return $readonly;
+        }
+        if (($validation = $this->validatePolicyPayload('server')) !== null) {
+            return $validation;
+        }
+        $payload = $this->request->hasPost('server') ? $this->request->getPost('server') : [];
+        $newName = is_array($payload) && !empty($payload['name']) ? trim((string)$payload['name']) : $oldName;
+        $policy = $this->policyPayload('server');
+        $result = $this->setBase('server', 'servers.server', $uuid);
+        if (($result['result'] ?? '') === 'saved' && $this->hasPolicyManager()) {
+            try {
+                if ($policy !== null) {
+                    \OPNsense\ApiExtensions\PolicyAssignmentManager::setHAProxy('server', $newName, $policy, $oldName);
+                } else {
+                    \OPNsense\ApiExtensions\PolicyAssignmentManager::renameHAProxy('server', $oldName, $newName);
+                }
+            } catch (\Throwable $error) {
+                return ['result' => 'failed', 'validations' => ['server.ha_policy' => $error->getMessage()]];
+            }
+        }
+        return $result;
     }
 
     public function addServerAction()
     {
-        return $this->addBase('server', 'servers.server');
+        if (($validation = $this->validatePolicyPayload('server')) !== null) {
+            return $validation;
+        }
+        $payload = $this->request->hasPost('server') ? $this->request->getPost('server') : [];
+        $name = is_array($payload) ? trim((string)($payload['name'] ?? '')) : '';
+        $policy = $this->policyPayload('server');
+        $result = $this->addBase('server', 'servers.server');
+        if (($result['result'] ?? '') === 'saved' && $policy !== null && $this->hasPolicyManager()) {
+            try {
+                \OPNsense\ApiExtensions\PolicyAssignmentManager::setHAProxy('server', $name, $policy);
+            } catch (\Throwable $error) {
+                if (!empty($result['uuid'])) {
+                    $this->delBase('servers.server', $result['uuid']);
+                }
+                return ['result' => 'failed', 'validations' => ['server.ha_policy' => $error->getMessage()]];
+            }
+        }
+        return $result;
     }
 
     public function delServerAction($uuid)
     {
-        return $this->delBase('servers.server', $uuid);
+        $names = [];
+        foreach (explode(',', (string)$uuid) as $itemUuid) {
+            $name = $this->objectName('server', trim($itemUuid));
+            if (($readonly = $this->readonlyReplica('server', $name, 'server')) !== null) {
+                return $readonly;
+            }
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+        $result = $this->delBase('servers.server', $uuid);
+        if (($result['result'] ?? '') === 'deleted' && $this->hasPolicyManager()) {
+            foreach ($names as $name) {
+                \OPNsense\ApiExtensions\PolicyAssignmentManager::removeHAProxy('server', $name);
+            }
+        }
+        return $result;
     }
 
     public function toggleServerAction($uuid, $enabled = null)
     {
+        $name = $this->objectName('server', $uuid);
+        if (($readonly = $this->readonlyReplica('server', $name, 'server')) !== null) {
+            return $readonly;
+        }
         return $this->toggleBase('servers.server', $uuid);
     }
 
     public function searchServersAction()
     {
-        return $this->searchBase('servers.server', array('enabled', 'name', 'type', 'mode', 'address', 'port', 'description'), 'name');
+        return $this->enrichPolicySearch(
+            $this->searchBase('servers.server', array('enabled', 'name', 'type', 'mode', 'address', 'port', 'description'), 'name'),
+            'server'
+        );
     }
 
     public function getHealthcheckAction($uuid = null)
