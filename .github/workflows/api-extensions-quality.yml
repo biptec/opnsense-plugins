@@ -63,5 +63,10 @@ jobs:
       - name: Run system DNS contract tests
         run: python3 -m unittest sysutils/api-extensions/tests/test_system_dns.py
 
+      - name: Run local package status contract tests
+        run: |
+          sh -n sysutils/api-extensions/src/opnsense/scripts/OPNsense/ApiExtensions/package_status.sh
+          python3 -m unittest sysutils/api-extensions/tests/test_package_status.py
+
       - name: Check whitespace
         run: git diff --check
