@@ -11,7 +11,7 @@ SCRIPT = ROOT / "src/opnsense/scripts/OPNsense/ApiExtensions/package_status.sh"
 class PackageStatusContractTest(unittest.TestCase):
     def test_plugin_version_requires_local_package_api(self):
         source = MAKEFILE.read_text()
-        self.assertIn("PLUGIN_VERSION=\t0.12", source)
+        self.assertIn("PLUGIN_VERSION=\t0.13", source)
 
     def test_controller_uses_only_local_package_status_action(self):
         source = CONTROLLER.read_text()

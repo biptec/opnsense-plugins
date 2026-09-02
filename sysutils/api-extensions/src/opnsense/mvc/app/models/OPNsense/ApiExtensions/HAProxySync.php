@@ -5,10 +5,10 @@ require_once __DIR__ . '/InterfaceSync.php';
 
 final class HAProxySync
 {
-    public const VERSION = 1;
+    public const VERSION = 2;
     public const HA_SYNC_ITEM = 'haproxy_objects';
 
-    private const OBJECT_TYPES = ['server', 'backend'];
+    private const OBJECT_TYPES = ['healthcheck', 'server', 'backend'];
     private const OBJECT_NAME = '/^[0-9A-Za-z._-]{1,255}$/D';
     private const SERVER_UNSUPPORTED_REFERENCES = [
         'linkedResolver',
@@ -20,7 +20,6 @@ final class HAProxySync
     private const BACKEND_UNSUPPORTED_REFERENCES = [
         'linkedFcgi',
         'linkedResolver',
-        'healthCheck',
         'linkedMailer',
         'basicAuthUsers',
         'basicAuthGroups',
@@ -157,7 +156,7 @@ final class HAProxySync
     {
         $value = trim((string)$value);
         if (!in_array($value, self::OBJECT_TYPES, true)) {
-            self::fail('HAProxy sync object_type must be server or backend');
+            self::fail('HAProxy sync object_type must be healthcheck, server or backend');
         }
         return $value;
     }
@@ -310,7 +309,12 @@ final class HAProxySync
     private static function haProxyRows(array $config, string $type): array
     {
         $root = self::haproxyRoot($config);
-        $section = $type === 'server' ? 'servers' : 'backends';
+        $section = match ($type) {
+            'healthcheck' => 'healthchecks',
+            'server' => 'servers',
+            'backend' => 'backends',
+            default => throw new \InvalidArgumentException('unsupported HAProxy object type'),
+        };
         return self::containerRows($root[$section] ?? [], $type, 'OPNsense.HAProxy.' . $section);
     }
 
@@ -318,6 +322,7 @@ final class HAProxySync
     {
         $objects = [];
         $serverUuidToName = [];
+        $healthcheckUuidToName = [];
         foreach (self::OBJECT_TYPES as $type) {
             foreach (self::haProxyRows($config, $type) as $row) {
                 if (!is_array($row)) {
@@ -337,19 +342,30 @@ final class HAProxySync
                     'id' => $id,
                     'row' => $row,
                 ];
-                if ($type === 'server') {
+                if ($type === 'server' || $type === 'healthcheck') {
                     if ($uuid === '') {
-                        self::fail('HAProxy server ' . $name . ' is missing its MVC UUID');
+                        self::fail('HAProxy ' . $type . ' ' . $name . ' is missing its MVC UUID');
                     }
-                    if (isset($serverUuidToName[$uuid])) {
-                        self::fail('duplicate HAProxy server MVC UUID');
+                    if ($type === 'server') {
+                        if (isset($serverUuidToName[$uuid])) {
+                            self::fail('duplicate HAProxy server MVC UUID');
+                        }
+                        $serverUuidToName[$uuid] = $name;
+                    } else {
+                        if (isset($healthcheckUuidToName[$uuid])) {
+                            self::fail('duplicate HAProxy healthcheck MVC UUID');
+                        }
+                        $healthcheckUuidToName[$uuid] = $name;
                     }
-                    $serverUuidToName[$uuid] = $name;
                 }
             }
         }
         ksort($objects);
-        return ['objects' => $objects, 'server_uuid_to_name' => $serverUuidToName];
+        return [
+            'objects' => $objects,
+            'server_uuid_to_name' => $serverUuidToName,
+            'healthcheck_uuid_to_name' => $healthcheckUuidToName,
+        ];
     }
 
     private static function relationValues($value): array
@@ -391,11 +407,18 @@ final class HAProxySync
         return trim((string)$value) !== '';
     }
 
-    private static function payloadData(array $row, string $type, array $serverUuidToName): array
-    {
-        $unsupported = $type === 'server'
-            ? self::SERVER_UNSUPPORTED_REFERENCES
-            : self::BACKEND_UNSUPPORTED_REFERENCES;
+    private static function payloadData(
+        array $row,
+        string $type,
+        array $serverUuidToName,
+        array $healthcheckUuidToName
+    ): array {
+        $unsupported = match ($type) {
+            'server' => self::SERVER_UNSUPPORTED_REFERENCES,
+            'backend' => self::BACKEND_UNSUPPORTED_REFERENCES,
+            'healthcheck' => [],
+            default => throw new \InvalidArgumentException('unsupported HAProxy object type'),
+        };
         foreach ($unsupported as $field) {
             if (self::hasValue($row[$field] ?? null)) {
                 self::fail(sprintf(
@@ -410,6 +433,7 @@ final class HAProxySync
         $data = $row;
         unset($data['@attributes'], $data['id']);
         $linkedServerNames = [];
+        $linkedHealthcheckName = '';
         if ($type === 'backend') {
             foreach (self::relationValues($data['linkedServers'] ?? null) as $serverUuid) {
                 if (!isset($serverUuidToName[$serverUuid])) {
@@ -421,7 +445,22 @@ final class HAProxySync
                 }
                 $linkedServerNames[] = $serverUuidToName[$serverUuid];
             }
-            unset($data['linkedServers']);
+            $healthchecks = self::relationValues($data['healthCheck'] ?? null);
+            if (count($healthchecks) > 1) {
+                self::fail('HAProxy backend healthCheck must reference at most one Health Monitor');
+            }
+            if ($healthchecks !== []) {
+                $healthcheckUuid = $healthchecks[0];
+                if (!isset($healthcheckUuidToName[$healthcheckUuid])) {
+                    self::fail(sprintf(
+                        'HAProxy backend %s references unknown healthcheck UUID %s',
+                        (string)($row['name'] ?? ''),
+                        $healthcheckUuid
+                    ));
+                }
+                $linkedHealthcheckName = $healthcheckUuidToName[$healthcheckUuid];
+            }
+            unset($data['linkedServers'], $data['healthCheck']);
         }
 
         foreach ($data as $field => $value) {
@@ -435,7 +474,7 @@ final class HAProxySync
             }
             $data[$field] = $value === null ? '' : (string)$value;
         }
-        return [$data, $linkedServerNames];
+        return [$data, $linkedServerNames, $linkedHealthcheckName];
     }
 
     public static function buildPayload(array $config): array
@@ -481,10 +520,11 @@ final class HAProxySync
                 if ($object['object_type'] !== $type || !isset($selected[$key])) {
                     continue;
                 }
-                [$data, $linkedServerNames] = self::payloadData(
+                [$data, $linkedServerNames, $linkedHealthcheckName] = self::payloadData(
                     $object['row'],
                     $type,
-                    $inventory['server_uuid_to_name']
+                    $inventory['server_uuid_to_name'],
+                    $inventory['healthcheck_uuid_to_name']
                 );
                 if ($type === 'backend') {
                     foreach ($linkedServerNames as $serverName) {
@@ -497,6 +537,14 @@ final class HAProxySync
                             ));
                         }
                     }
+                    if ($linkedHealthcheckName !== '' &&
+                        !isset($selected[self::objectKey('healthcheck', $linkedHealthcheckName)])) {
+                        self::fail(sprintf(
+                            'HAProxy backend %s links healthcheck %s that is not selected for synchronization',
+                            $object['object_name'],
+                            $linkedHealthcheckName
+                        ));
+                    }
                 }
                 $payloadObjects[] = [
                     'object_type' => $type,
@@ -504,6 +552,7 @@ final class HAProxySync
                     'policy_id' => $assignments[$key]['policy_id'],
                     'data' => $data,
                     'linked_server_names' => $linkedServerNames,
+                    'linked_healthcheck_name' => $linkedHealthcheckName,
                 ];
             }
         }
@@ -554,10 +603,11 @@ final class HAProxySync
         $keys = [];
         foreach (array_values($payload['objects']) as $row) {
             if (!is_array($row) ||
-                array_diff(array_keys($row), ['object_type', 'object_name', 'policy_id', 'data', 'linked_server_names']) ||
-                count($row) !== 5 ||
+                array_diff(array_keys($row), ['object_type', 'object_name', 'policy_id', 'data', 'linked_server_names', 'linked_healthcheck_name']) ||
+                count($row) !== 6 ||
                 !is_array($row['data']) ||
-                !is_array($row['linked_server_names'])) {
+                !is_array($row['linked_server_names']) ||
+                !is_scalar($row['linked_healthcheck_name'])) {
                 self::fail('invalid HAProxy sync object record');
             }
             $type = self::objectType($row['object_type']);
@@ -578,7 +628,7 @@ final class HAProxySync
             $data = [];
             foreach ($row['data'] as $field => $value) {
                 if (!is_string($field) || $field === '' ||
-                    in_array($field, ['@attributes', 'id', 'linkedServers'], true) ||
+                    in_array($field, ['@attributes', 'id', 'linkedServers', 'healthCheck'], true) ||
                     (!is_scalar($value) && $value !== null)) {
                     self::fail('invalid HAProxy sync object data');
                 }
@@ -592,8 +642,12 @@ final class HAProxySync
             foreach (array_values($row['linked_server_names']) as $serverName) {
                 $linkedServerNames[] = self::objectName($serverName);
             }
-            if ($type === 'server' && $linkedServerNames !== []) {
-                self::fail('HAProxy server records cannot contain linked_server_names');
+            $linkedHealthcheckName = trim((string)$row['linked_healthcheck_name']);
+            if ($linkedHealthcheckName !== '') {
+                $linkedHealthcheckName = self::objectName($linkedHealthcheckName);
+            }
+            if ($type !== 'backend' && ($linkedServerNames !== [] || $linkedHealthcheckName !== '')) {
+                self::fail('Only HAProxy backend records may contain semantic relations');
             }
             $objects[] = [
                 'object_type' => $type,
@@ -601,6 +655,7 @@ final class HAProxySync
                 'policy_id' => $policyId,
                 'data' => $data,
                 'linked_server_names' => array_values(array_unique($linkedServerNames)),
+                'linked_healthcheck_name' => $linkedHealthcheckName,
             ];
         }
 
@@ -621,10 +676,18 @@ final class HAProxySync
                     ));
                 }
             }
+            if ($row['linked_healthcheck_name'] !== '' &&
+                !isset($selected[self::objectKey('healthcheck', $row['linked_healthcheck_name'])])) {
+                self::fail(sprintf(
+                    'HAProxy backend %s links healthcheck %s missing from payload',
+                    $row['object_name'],
+                    $row['linked_healthcheck_name']
+                ));
+            }
         }
 
         usort($objects, function ($a, $b) {
-            $typeOrder = ['server' => 0, 'backend' => 1];
+            $typeOrder = ['healthcheck' => 0, 'server' => 1, 'backend' => 2];
             return [$typeOrder[$a['object_type']], $a['object_name']] <=> [$typeOrder[$b['object_type']], $b['object_name']];
         });
         return [
@@ -659,7 +722,12 @@ final class HAProxySync
     private static function setHAProxyRows(array &$config, string $type, array $rows): void
     {
         $root =& self::haproxyRootForWrite($config);
-        $section = $type === 'server' ? 'servers' : 'backends';
+        $section = match ($type) {
+            'healthcheck' => 'healthchecks',
+            'server' => 'servers',
+            'backend' => 'backends',
+            default => throw new \InvalidArgumentException('unsupported HAProxy object type'),
+        };
         $root[$section] = self::serializeRowsLike($root[$section] ?? '', $type, $rows);
     }
 
@@ -738,6 +806,36 @@ final class HAProxySync
         }
 
         $next = $config;
+        $healthcheckRows = [];
+        foreach (self::haProxyRows($config, 'healthcheck') as $row) {
+            $name = self::objectName($row['name'] ?? '');
+            $key = self::objectKey('healthcheck', $name);
+            if (!isset($managed[$key])) {
+                $healthcheckRows[] = $row;
+            }
+        }
+        foreach ($desired as $key => $row) {
+            if ($row['object_type'] !== 'healthcheck') {
+                continue;
+            }
+            $current = isset($managed[$key]) ? ($currentObjects[$key]['row'] ?? null) : null;
+            [$uuid, $id] = self::localIdentity($current, $uuidFactory, $idFactory);
+            $healthcheckRows[] = ['@attributes' => ['uuid' => $uuid], 'id' => $id] + $row['data'];
+        }
+        self::setHAProxyRows($next, 'healthcheck', $healthcheckRows);
+
+        $finalHealthcheckUuidByName = [];
+        $finalHealthcheckByUuid = [];
+        foreach (self::haProxyRows($next, 'healthcheck') as $row) {
+            $name = self::objectName($row['name'] ?? '');
+            $uuid = trim((string)($row['@attributes']['uuid'] ?? ''));
+            if ($uuid === '') {
+                self::fail('final HAProxy healthcheck ' . $name . ' is missing its MVC UUID');
+            }
+            $finalHealthcheckUuidByName[$name] = $uuid;
+            $finalHealthcheckByUuid[$uuid] = $name;
+        }
+
         $serverRows = [];
         foreach (self::haProxyRows($config, 'server') as $row) {
             $name = self::objectName($row['name'] ?? '');
@@ -797,6 +895,18 @@ final class HAProxySync
             }
             $newRow = ['@attributes' => ['uuid' => $uuid], 'id' => $id] + $row['data'];
             $newRow['linkedServers'] = implode(',', $linked);
+            if ($row['linked_healthcheck_name'] !== '') {
+                if (!isset($finalHealthcheckUuidByName[$row['linked_healthcheck_name']])) {
+                    self::fail(sprintf(
+                        'HAProxy backend %s cannot resolve local healthcheck %s',
+                        $row['object_name'],
+                        $row['linked_healthcheck_name']
+                    ));
+                }
+                $newRow['healthCheck'] = $finalHealthcheckUuidByName[$row['linked_healthcheck_name']];
+            } else {
+                $newRow['healthCheck'] = '';
+            }
             $backendRows[] = $newRow;
         }
 
@@ -807,6 +917,15 @@ final class HAProxySync
                         'final HAProxy backend %s references server UUID %s that would be removed',
                         (string)($row['name'] ?? ''),
                         $serverUuid
+                    ));
+                }
+            }
+            foreach (self::relationValues($row['healthCheck'] ?? null) as $healthcheckUuid) {
+                if (!isset($finalHealthcheckByUuid[$healthcheckUuid])) {
+                    self::fail(sprintf(
+                        'final HAProxy backend %s references healthcheck UUID %s that would be removed',
+                        (string)($row['name'] ?? ''),
+                        $healthcheckUuid
                     ));
                 }
             }

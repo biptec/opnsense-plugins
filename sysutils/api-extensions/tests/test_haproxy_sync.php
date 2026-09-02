@@ -54,6 +54,7 @@ function policies(): array
 
 function sourceConfig(): array
 {
+    $healthcheckName = 'hc-customer-example';
     $serverName = 'origin-customer-example';
     $backendName = 'sni-customer.example';
     return [
@@ -61,12 +62,31 @@ function sourceConfig(): array
         'OPNsense' => [
             'ApiExtensions' => [
                 'InterfaceSyncPolicy' => policyModel(policies(), [
+                    ['object_type' => 'healthcheck', 'object_name' => $healthcheckName, 'policy_id' => 'endpoint'],
                     ['object_type' => 'server', 'object_name' => $serverName, 'policy_id' => 'endpoint'],
                     ['object_type' => 'backend', 'object_name' => $backendName, 'policy_id' => 'endpoint'],
                 ]),
             ],
             'HAProxy' => [
                 'general' => ['enabled' => '1'],
+                'healthchecks' => ['healthcheck' => [
+                    '@attributes' => ['uuid' => 'source-healthcheck-uuid'],
+                    'id' => 'source-healthcheck-id',
+                    'name' => $healthcheckName,
+                    'description' => 'Customer TCP health monitor',
+                    'type' => 'tcp',
+                    'interval' => '2000',
+                    'ssl' => 'nopref',
+                    'sslSNI' => '',
+                    'force_ssl' => '0',
+                    'checkport' => '',
+                    'http_method' => '',
+                    'http_uri' => '',
+                    'http_host' => '',
+                    'tcp_sendValue' => '',
+                    'tcp_matchType' => '',
+                    'tcp_matchValue' => '',
+                ]],
                 'servers' => ['server' => [
                     '@attributes' => ['uuid' => 'source-server-uuid'],
                     'id' => 'source-server-id',
@@ -98,12 +118,14 @@ function sourceConfig(): array
                     'description' => 'Customer SNI backend',
                     'mode' => 'tcp',
                     'algorithm' => 'roundrobin',
+                    'proxyProtocol' => 'v2',
                     'linkedServers' => 'source-server-uuid',
                     'linkedFcgi' => '',
                     'linkedResolver' => '',
-                    'healthCheckEnabled' => '0',
-                    'healthCheck' => '',
-                    'checkInterval' => '',
+                    'healthCheckEnabled' => '1',
+                    'healthCheck' => 'source-healthcheck-uuid',
+                    'healthCheckProxyProto' => 'backend',
+                    'checkInterval' => '2000',
                     'checkDownInterval' => '',
                     'healthCheckFall' => '',
                     'healthCheckRise' => '',
@@ -135,6 +157,7 @@ function receiverBase(): array
             'ApiExtensions' => ['InterfaceSyncPolicy' => policyModel(policies())],
             'HAProxy' => [
                 'general' => ['enabled' => '1'],
+                'healthchecks' => '',
                 'servers' => '',
                 'backends' => '',
                 'frontends' => ['frontend' => [
@@ -181,36 +204,48 @@ $wrappedSingleton['OPNsense']['HAProxy']['servers'] = [[
     'server' => $source['OPNsense']['HAProxy']['servers']['server'],
 ]];
 $wrappedPayload = HAProxySync::buildPayload($wrappedSingleton);
-eq(2, count($wrappedPayload['objects']), 'list-wrapped singleton HAProxy server is normalized');
-eq(['origin-customer-example'], $wrappedPayload['objects'][1]['linked_server_names'], 'list-wrapped singleton server UUID relation resolves by semantic name');
+eq(3, count($wrappedPayload['objects']), 'list-wrapped singleton HAProxy server is normalized');
+eq(['origin-customer-example'], $wrappedPayload['objects'][2]['linked_server_names'], 'list-wrapped singleton server UUID relation resolves by semantic name');
 
 $payload = HAProxySync::buildPayload($source);
 eq(true, HAProxySync::isEnabled($source), 'HAProxy custom sync service enabled');
-eq(1, $payload['version'], 'payload version');
-eq(2, count($payload['objects']), 'server and backend selected by explicit policy');
-eq('server', $payload['objects'][0]['object_type'], 'server emitted first');
-eq('origin-customer-example', $payload['objects'][0]['object_name'], 'server semantic name');
-eq(false, array_key_exists('@attributes', $payload['objects'][0]['data']), 'source MVC UUID stripped');
-eq(false, array_key_exists('id', $payload['objects'][0]['data']), 'source HAProxy id stripped');
-eq(['origin-customer-example'], $payload['objects'][1]['linked_server_names'], 'backend relation converted to semantic server name');
-eq(false, array_key_exists('linkedServers', $payload['objects'][1]['data']), 'source linkedServers UUID stripped');
+eq(2, $payload['version'], 'payload version');
+eq(3, count($payload['objects']), 'healthcheck, server and backend selected by explicit policy');
+eq('healthcheck', $payload['objects'][0]['object_type'], 'healthcheck emitted first');
+eq('hc-customer-example', $payload['objects'][0]['object_name'], 'healthcheck semantic name');
+eq('server', $payload['objects'][1]['object_type'], 'server emitted before backend');
+eq('origin-customer-example', $payload['objects'][1]['object_name'], 'server semantic name');
+eq(false, array_key_exists('@attributes', $payload['objects'][0]['data']), 'source healthcheck MVC UUID stripped');
+eq(false, array_key_exists('id', $payload['objects'][0]['data']), 'source healthcheck id stripped');
+eq(['origin-customer-example'], $payload['objects'][2]['linked_server_names'], 'backend relation converted to semantic server name');
+eq('hc-customer-example', $payload['objects'][2]['linked_healthcheck_name'], 'backend healthcheck relation converted to semantic name');
+eq(false, array_key_exists('linkedServers', $payload['objects'][2]['data']), 'source linkedServers UUID stripped');
+eq(false, array_key_exists('healthCheck', $payload['objects'][2]['data']), 'source healthCheck UUID stripped');
+eq('v2', $payload['objects'][2]['data']['proxyProtocol'], 'backend PROXY v2 scalar copied');
+eq('backend', $payload['objects'][2]['data']['healthCheckProxyProto'], 'health-check PROXY behavior copied');
 
 $receiver = receiverBase();
 $created = HAProxySync::reconcile($receiver, $payload, nextFactory('receiver-uuid-'), nextFactory('receiver-id-'));
 eq(true, $created['changed'], 'create changes receiver');
-eq(2, $created['count'], 'two managed objects');
+eq(3, $created['count'], 'three managed objects');
 $createdConfig = $created['config'];
+$healthcheckRows = rows($createdConfig['OPNsense']['HAProxy']['healthchecks'], 'healthcheck');
 $serverRows = rows($createdConfig['OPNsense']['HAProxy']['servers'], 'server');
 $backendRows = rows($createdConfig['OPNsense']['HAProxy']['backends'], 'backend');
+eq(1, count($healthcheckRows), 'one receiver healthcheck');
 eq(1, count($serverRows), 'one receiver server');
 eq(1, count($backendRows), 'one receiver backend');
-eq('receiver-uuid-1', $serverRows[0]['@attributes']['uuid'], 'receiver generates local server UUID');
-eq('receiver-id-1', $serverRows[0]['id'], 'receiver generates local server id');
-eq('receiver-uuid-2', $backendRows[0]['@attributes']['uuid'], 'receiver generates local backend UUID');
-eq('receiver-id-2', $backendRows[0]['id'], 'receiver generates local backend id');
-eq('receiver-uuid-1', $backendRows[0]['linkedServers'], 'backend remapped to receiver-local server UUID');
+eq('receiver-uuid-1', $healthcheckRows[0]['@attributes']['uuid'], 'receiver generates local healthcheck UUID');
+eq('receiver-id-1', $healthcheckRows[0]['id'], 'receiver generates local healthcheck id');
+eq('receiver-uuid-2', $serverRows[0]['@attributes']['uuid'], 'receiver generates local server UUID');
+eq('receiver-id-2', $serverRows[0]['id'], 'receiver generates local server id');
+eq('receiver-uuid-3', $backendRows[0]['@attributes']['uuid'], 'receiver generates local backend UUID');
+eq('receiver-id-3', $backendRows[0]['id'], 'receiver generates local backend id');
+eq('receiver-uuid-2', $backendRows[0]['linkedServers'], 'backend remapped to receiver-local server UUID');
+eq('receiver-uuid-1', $backendRows[0]['healthCheck'], 'backend remapped to receiver-local healthcheck UUID');
 eq('192.0.2.44', $serverRows[0]['address'], 'server scalar configuration copied');
 eq('receiver-independent-frontend', $createdConfig['OPNsense']['HAProxy']['frontends']['frontend']['@attributes']['uuid'], 'frontend baseline untouched');
+eq('endpoint', HAProxySync::replicas($createdConfig)['healthcheck:hc-customer-example']['policy_id'], 'healthcheck replica ownership recorded');
 eq('endpoint', HAProxySync::replicas($createdConfig)['server:origin-customer-example']['policy_id'], 'server replica ownership recorded');
 eq('endpoint', HAProxySync::replicas($createdConfig)['backend:sni-customer.example']['policy_id'], 'backend replica ownership recorded');
 
@@ -257,13 +292,17 @@ $updated = HAProxySync::reconcile(
     fn() => throw new RuntimeException('update id factory should not run')
 );
 $updatedServer = rows($updated['config']['OPNsense']['HAProxy']['servers'], 'server')[0];
-eq('receiver-uuid-1', $updatedServer['@attributes']['uuid'], 'update preserves local server UUID');
-eq('receiver-id-1', $updatedServer['id'], 'update preserves local server id');
+eq('receiver-uuid-2', $updatedServer['@attributes']['uuid'], 'update preserves local server UUID');
+eq('receiver-id-2', $updatedServer['id'], 'update preserves local server id');
 eq('192.0.2.55', $updatedServer['address'], 'update changes scalar data');
 
 $localOnly = $source;
-$localOnly['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments']['assignment'][0]['policy_id'] = 'core';
+$localOnly['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments']['assignment'][1]['policy_id'] = 'core';
 bad(fn() => HAProxySync::buildPayload($localOnly), 'sync backend cannot depend on a local-only server');
+
+$localOnlyHealthcheck = $source;
+$localOnlyHealthcheck['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments']['assignment'][0]['policy_id'] = 'core';
+bad(fn() => HAProxySync::buildPayload($localOnlyHealthcheck), 'sync backend cannot depend on a local-only healthcheck');
 
 $missingAssignment = $source;
 array_pop($missingAssignment['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments']['assignment']);
@@ -288,22 +327,30 @@ $collision['OPNsense']['HAProxy']['servers'] = ['server' => [
 bad(fn() => HAProxySync::reconcile($collision, $payload), 'unassigned local semantic name cannot be overwritten');
 
 $legacy = receiverBase();
+$legacy['OPNsense']['HAProxy']['healthchecks'] = $source['OPNsense']['HAProxy']['healthchecks'];
 $legacy['OPNsense']['HAProxy']['servers'] = $source['OPNsense']['HAProxy']['servers'];
 $legacy['OPNsense']['HAProxy']['backends'] = $source['OPNsense']['HAProxy']['backends'];
+$legacy['OPNsense']['HAProxy']['healthchecks']['healthcheck']['@attributes']['uuid'] = 'legacy-healthcheck-uuid';
+$legacy['OPNsense']['HAProxy']['healthchecks']['healthcheck']['id'] = 'legacy-healthcheck-id';
 $legacy['OPNsense']['HAProxy']['servers']['server']['@attributes']['uuid'] = 'legacy-server-uuid';
 $legacy['OPNsense']['HAProxy']['servers']['server']['id'] = 'legacy-server-id';
 $legacy['OPNsense']['HAProxy']['backends']['backend']['@attributes']['uuid'] = 'legacy-backend-uuid';
 $legacy['OPNsense']['HAProxy']['backends']['backend']['id'] = 'legacy-backend-id';
 $legacy['OPNsense']['HAProxy']['backends']['backend']['linkedServers'] = 'legacy-server-uuid';
+$legacy['OPNsense']['HAProxy']['backends']['backend']['healthCheck'] = 'legacy-healthcheck-uuid';
 $legacy['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments'] = $source['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments'];
 $adopted = HAProxySync::reconcile($legacy, $payload, nextFactory('adopt-meta-'), nextFactory('unused-id-'));
-eq(['server:origin-customer-example', 'backend:sni-customer.example'], $adopted['plan']['adopted_local_assignments'], 'legacy dual-node objects adopted only with explicit matching policies');
+eq(['healthcheck:hc-customer-example', 'server:origin-customer-example', 'backend:sni-customer.example'], $adopted['plan']['adopted_local_assignments'], 'legacy dual-node objects adopted only with explicit matching policies');
+$adoptedHealthchecks = rows($adopted['config']['OPNsense']['HAProxy']['healthchecks'], 'healthcheck');
 $adoptedServers = rows($adopted['config']['OPNsense']['HAProxy']['servers'], 'server');
 $adoptedBackends = rows($adopted['config']['OPNsense']['HAProxy']['backends'], 'backend');
+eq('legacy-healthcheck-uuid', $adoptedHealthchecks[0]['@attributes']['uuid'], 'adoption preserves receiver healthcheck UUID');
+eq('legacy-healthcheck-id', $adoptedHealthchecks[0]['id'], 'adoption preserves receiver healthcheck id');
 eq('legacy-server-uuid', $adoptedServers[0]['@attributes']['uuid'], 'adoption preserves receiver server UUID');
 eq('legacy-server-id', $adoptedServers[0]['id'], 'adoption preserves receiver server id');
 eq('legacy-backend-uuid', $adoptedBackends[0]['@attributes']['uuid'], 'adoption preserves receiver backend UUID');
 eq('legacy-server-uuid', $adoptedBackends[0]['linkedServers'], 'adopted backend remains linked to receiver server UUID');
+eq('legacy-healthcheck-uuid', $adoptedBackends[0]['healthCheck'], 'adopted backend remains linked to receiver healthcheck UUID');
 eq([], HAProxySync::assignments($adopted['config']), 'adopted local assignments removed');
 
 $emptyPayload = $payload;
@@ -314,6 +361,7 @@ $pruned = HAProxySync::reconcile(
     fn() => throw new RuntimeException('prune UUID factory should not run'),
     fn() => throw new RuntimeException('prune id factory should not run')
 );
+eq([], rows($pruned['config']['OPNsense']['HAProxy']['healthchecks'], 'healthcheck'), 'stale peer-owned healthcheck pruned');
 eq([], rows($pruned['config']['OPNsense']['HAProxy']['servers'], 'server'), 'stale peer-owned server pruned');
 eq([], rows($pruned['config']['OPNsense']['HAProxy']['backends'], 'backend'), 'stale peer-owned backend pruned');
 eq([], HAProxySync::replicas($pruned['config']), 'stale replica ownership pruned');
@@ -329,10 +377,26 @@ $unsafePrune['OPNsense']['HAProxy']['backends']['backend'] = [
         'name' => 'local-backend',
         'mode' => 'tcp',
         'algorithm' => 'roundrobin',
-        'linkedServers' => 'receiver-uuid-1',
+        'linkedServers' => 'receiver-uuid-2',
     ],
 ];
 bad(fn() => HAProxySync::reconcile($unsafePrune, $emptyPayload), 'cannot prune server still referenced by local backend');
+
+$unsafeHealthcheckPrune = $createdConfig;
+$unsafeHealthcheckPrune['OPNsense']['HAProxy']['backends']['backend'] = [
+    $unsafeHealthcheckPrune['OPNsense']['HAProxy']['backends']['backend'],
+    [
+        '@attributes' => ['uuid' => 'local-health-backend-uuid'],
+        'id' => 'local-health-backend-id',
+        'enabled' => '1',
+        'name' => 'local-health-backend',
+        'mode' => 'tcp',
+        'algorithm' => 'roundrobin',
+        'linkedServers' => '',
+        'healthCheck' => 'receiver-uuid-1',
+    ],
+];
+bad(fn() => HAProxySync::reconcile($unsafeHealthcheckPrune, $emptyPayload), 'cannot prune healthcheck still referenced by local backend');
 
 $receiverLocalPolicy = $createdConfig;
 $receiverLocalPolicy['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['shared']['policies']['policy'][] = [
@@ -368,6 +432,7 @@ bad(
 );
 
 $nativeEmpty = receiverBase();
+$nativeEmpty['OPNsense']['HAProxy']['healthchecks'] = [];
 $nativeEmpty['OPNsense']['HAProxy']['servers'] = [];
 $nativeEmpty['OPNsense']['HAProxy']['backends'] = '';
 $nativeEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments'] = '';
@@ -379,6 +444,7 @@ $nativeEmptyResult = HAProxySync::reconcile(
     fn() => throw new RuntimeException('native-empty id factory should not run')
 );
 eq(false, $nativeEmptyResult['changed'], 'native empty HAProxy section shapes remain a true no-op');
+eq([], $nativeEmptyResult['config']['OPNsense']['HAProxy']['healthchecks'], 'native empty healthcheck array shape is preserved');
 eq([], $nativeEmptyResult['config']['OPNsense']['HAProxy']['servers'], 'native empty server array shape is preserved');
 eq('', $nativeEmptyResult['config']['OPNsense']['HAProxy']['backends'], 'native empty backend string shape is preserved');
 
@@ -387,6 +453,7 @@ eq('', $nativeEmptyResult['config']['OPNsense']['HAProxy']['backends'], 'native 
 // item name; otherwise write_config() creates <servers uuid="..."> and native
 // HAProxy ignores the object even though the custom inventory can parse it.
 $emptyArrayCreate = receiverBase();
+$emptyArrayCreate['OPNsense']['HAProxy']['healthchecks'] = [];
 $emptyArrayCreate['OPNsense']['HAProxy']['servers'] = [];
 $emptyArrayCreate['OPNsense']['HAProxy']['backends'] = [];
 $emptyArrayResult = HAProxySync::reconcile(
@@ -395,14 +462,16 @@ $emptyArrayResult = HAProxySync::reconcile(
     nextFactory('empty-array-uuid-'),
     nextFactory('empty-array-id-')
 );
+eq(true, isset($emptyArrayResult['config']['OPNsense']['HAProxy']['healthchecks']['healthcheck']), 'first healthcheck uses native MVC item container');
 eq(true, isset($emptyArrayResult['config']['OPNsense']['HAProxy']['servers']['server']), 'first server uses native MVC item container');
 eq(true, isset($emptyArrayResult['config']['OPNsense']['HAProxy']['backends']['backend']), 'first backend uses native MVC item container');
+eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['healthchecks'], 'healthcheck')), 'native MVC sees first synchronized healthcheck');
 eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['servers'], 'server')), 'native MVC sees first synchronized server');
 eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['backends'], 'backend')), 'native MVC sees first synchronized backend');
 
 $serializedEmpty = receiverBase();
 $serializedEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_replicas'] = '';
 $serializedCreate = HAProxySync::reconcile($serializedEmpty, $payload, nextFactory('serialized-uuid-'), nextFactory('serialized-id-'));
-eq(2, count(HAProxySync::replicas($serializedCreate['config'])), 'empty serialized replica container accepts first objects');
+eq(3, count(HAProxySync::replicas($serializedCreate['config'])), 'empty serialized replica container accepts first objects');
 
 fwrite(STDOUT, "HAProxy policy sync tests passed\n");

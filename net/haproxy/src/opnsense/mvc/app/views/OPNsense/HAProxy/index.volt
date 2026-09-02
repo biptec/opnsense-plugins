@@ -860,12 +860,17 @@ POSSIBILITY OF SUCH DAMAGE.
     </div>
 
     <div id="healthchecks" class="tab-pane fade">
+        <div class="haproxy-ha-policy-statusbar" style="display:flex; align-items:center; gap:8px; margin-bottom:10px; min-height:24px;">
+            <strong>{{ lang._('HA synchronization') }}</strong>
+            <span class="haproxy-ha-policy-status label label-default">{{ lang._('Unknown') }}</span>
+        </div>
         <table id="grid-healthchecks" class="table table-condensed table-hover table-striped table-responsive" data-editDialog="DialogHealthcheck" data-editAlert="haproxyChangeMessage">
             <thead>
             <tr>
                 <th data-column-id="healthcheckid" data-type="number"  data-visible="false">{{ lang._('Health Monitor ID') }}</th>
                 <th data-column-id="name" data-type="string">{{ lang._('Health Monitor Name') }}</th>
                 <th data-column-id="description" data-type="string">{{ lang._('Description') }}</th>
+                <th data-column-id="ha_policy" data-type="string">{{ lang._('HA Policy') }}</th>
                 <th data-column-id="commands" data-width="7em" data-formatter="commands" data-sortable="false">{{ lang._('Commands') }}</th>
                 <th data-column-id="uuid" data-type="string" data-identifier="true"  data-visible="false">{{ lang._('ID') }}</th>
             </tr>
