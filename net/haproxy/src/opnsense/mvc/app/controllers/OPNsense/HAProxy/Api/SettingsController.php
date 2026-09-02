@@ -84,7 +84,15 @@ class SettingsController extends ApiMutableModelControllerBase
 
     private function objectName(string $type, string $uuid): string
     {
-        $path = $type === 'server' ? 'servers.server.' : 'backends.backend.';
+        $path = match ($type) {
+            'healthcheck' => 'healthchecks.healthcheck.',
+            'server' => 'servers.server.',
+            'backend' => 'backends.backend.',
+            default => '',
+        };
+        if ($path === '') {
+            return '';
+        }
         $node = $this->getModel()->getNodeByReference($path . $uuid);
         return $node === null ? '' : trim((string)$node->name->getValue());
     }
@@ -376,27 +384,85 @@ class SettingsController extends ApiMutableModelControllerBase
 
     public function getHealthcheckAction($uuid = null)
     {
-        return $this->getBase('healthcheck', 'healthchecks.healthcheck', $uuid);
+        return $this->enrichPolicyGet($this->getBase('healthcheck', 'healthchecks.healthcheck', $uuid), 'healthcheck', 'healthcheck');
     }
 
     public function setHealthcheckAction($uuid)
     {
-        return $this->setBase('healthcheck', 'healthchecks.healthcheck', $uuid);
+        $oldName = $this->objectName('healthcheck', $uuid);
+        if (($readonly = $this->readonlyReplica('healthcheck', $oldName, 'healthcheck')) !== null) {
+            return $readonly;
+        }
+        if (($validation = $this->validatePolicyPayload('healthcheck')) !== null) {
+            return $validation;
+        }
+        $payload = $this->request->hasPost('healthcheck') ? $this->request->getPost('healthcheck') : [];
+        $newName = is_array($payload) && !empty($payload['name']) ? trim((string)$payload['name']) : $oldName;
+        $policy = $this->policyPayload('healthcheck');
+        $result = $this->setBase('healthcheck', 'healthchecks.healthcheck', $uuid);
+        if (($result['result'] ?? '') === 'saved' && $this->hasPolicyManager()) {
+            try {
+                if ($policy !== null) {
+                    \OPNsense\ApiExtensions\PolicyAssignmentManager::setHAProxy('healthcheck', $newName, $policy, $oldName);
+                } else {
+                    \OPNsense\ApiExtensions\PolicyAssignmentManager::renameHAProxy('healthcheck', $oldName, $newName);
+                }
+            } catch (\Throwable $error) {
+                return ['result' => 'failed', 'validations' => ['healthcheck.ha_policy' => $error->getMessage()]];
+            }
+        }
+        return $result;
     }
 
     public function addHealthcheckAction()
     {
-        return $this->addBase('healthcheck', 'healthchecks.healthcheck');
+        if (($validation = $this->validatePolicyPayload('healthcheck')) !== null) {
+            return $validation;
+        }
+        $payload = $this->request->hasPost('healthcheck') ? $this->request->getPost('healthcheck') : [];
+        $name = is_array($payload) ? trim((string)($payload['name'] ?? '')) : '';
+        $policy = $this->policyPayload('healthcheck');
+        $result = $this->addBase('healthcheck', 'healthchecks.healthcheck');
+        if (($result['result'] ?? '') === 'saved' && $policy !== null && $this->hasPolicyManager()) {
+            try {
+                \OPNsense\ApiExtensions\PolicyAssignmentManager::setHAProxy('healthcheck', $name, $policy);
+            } catch (\Throwable $error) {
+                if (!empty($result['uuid'])) {
+                    $this->delBase('healthchecks.healthcheck', $result['uuid']);
+                }
+                return ['result' => 'failed', 'validations' => ['healthcheck.ha_policy' => $error->getMessage()]];
+            }
+        }
+        return $result;
     }
 
     public function delHealthcheckAction($uuid)
     {
-        return $this->delBase('healthchecks.healthcheck', $uuid);
+        $names = [];
+        foreach (explode(',', (string)$uuid) as $itemUuid) {
+            $name = $this->objectName('healthcheck', trim($itemUuid));
+            if (($readonly = $this->readonlyReplica('healthcheck', $name, 'healthcheck')) !== null) {
+                return $readonly;
+            }
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+        $result = $this->delBase('healthchecks.healthcheck', $uuid);
+        if (($result['result'] ?? '') === 'deleted' && $this->hasPolicyManager()) {
+            foreach ($names as $name) {
+                \OPNsense\ApiExtensions\PolicyAssignmentManager::removeHAProxy('healthcheck', $name);
+            }
+        }
+        return $result;
     }
 
     public function searchHealthchecksAction()
     {
-        return $this->searchBase('healthchecks.healthcheck', array('name', 'description'), 'name');
+        return $this->enrichPolicySearch(
+            $this->searchBase('healthchecks.healthcheck', array('name', 'description'), 'name'),
+            'healthcheck'
+        );
     }
 
     public function getAclAction($uuid = null)

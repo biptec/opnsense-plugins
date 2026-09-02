@@ -79,6 +79,7 @@
                 <object_type type="OptionField">
                     <Required>Y</Required>
                     <OptionValues>
+                        <healthcheck>Health Monitor</healthcheck>
                         <server>Server</server>
                         <backend>Backend</backend>
                     </OptionValues>
@@ -86,7 +87,7 @@
                 <object_name type="TextField">
                     <Required>Y</Required>
                     <Mask>/^([0-9a-zA-Z._\-]){1,255}$/u</Mask>
-                    <ValidationMessage>Use the exact HAProxy server or backend name.</ValidationMessage>
+                    <ValidationMessage>Use the exact HAProxy health monitor, server or backend name.</ValidationMessage>
                 </object_name>
                 <policy_id type="ModelRelationField">
                     <Required>Y</Required>
@@ -106,6 +107,7 @@
                 <object_type type="OptionField">
                     <Required>Y</Required>
                     <OptionValues>
+                        <healthcheck>Health Monitor</healthcheck>
                         <server>Server</server>
                         <backend>Backend</backend>
                     </OptionValues>

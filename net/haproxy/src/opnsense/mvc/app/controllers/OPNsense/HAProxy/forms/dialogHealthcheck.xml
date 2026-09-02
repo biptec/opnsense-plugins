@@ -12,6 +12,13 @@
         <help>Description for this Health Monitor.</help>
     </field>
     <field>
+        <id>healthcheck.ha_policy</id>
+        <label>HA Policy</label>
+        <type>dropdown</type>
+        <style>ha_policy_field</style>
+        <help>Select the High Availability policy for this Health Monitor. A synchronized backend may only reference a Health Monitor that is also selected for synchronization.</help>
+    </field>
+    <field>
         <id>healthcheck.type</id>
         <label>Check type</label>
         <type>dropdown</type>
