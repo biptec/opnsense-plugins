@@ -155,6 +155,16 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             self.assertIn(f"PolicyAssignmentManager::renameHAProxy('{object_type}'", controller)
         self.assertIn("HA peer replica and is read-only", controller)
 
+    def test_native_haproxy_template_supports_proxy_v2_health_checks(self):
+        template = (
+            ROOT.parents[1]
+            / "net/haproxy/src/opnsense/service/templates/OPNsense/HAProxy/haproxy.conf"
+        ).read_text()
+        self.assertIn('backend.proxyProtocol|default("") == "v2"', template)
+        self.assertIn("server_options.append('send-proxy-v2')", template)
+        self.assertIn('backend.healthCheckProxyProto|default("") == "backend"', template)
+        self.assertIn("server_options.append('check-send-proxy')", template)
+
     def test_policy_assignment_manager_preserves_native_object_ownership(self):
         helper = (MVC / "models/OPNsense/ApiExtensions/PolicyAssignmentManager.php").read_text()
         for marker in (
