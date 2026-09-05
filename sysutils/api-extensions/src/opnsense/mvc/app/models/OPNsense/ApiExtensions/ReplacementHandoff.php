@@ -286,7 +286,16 @@ final class ReplacementHandoff
         }
         $seen = [];
         foreach ($vips as &$row) {
-            if (!is_array($row) || trim((string)($row['mode'] ?? '')) !== 'carp') {
+            if (!is_array($row)) {
+                continue;
+            }
+            $mode = trim((string)($row['mode'] ?? ''));
+            $vhid = trim((string)($row['vhid'] ?? ''));
+            // OPNsense stores the IPv6 companion of a CARP VIP as a VHID-bound
+            // IP Alias.  It receives replica-side advskew adjustment too and
+            // therefore must be restored to its captured primary skew.
+            $carpMember = $mode === 'carp' || ($mode === 'ipalias' && $vhid !== '');
+            if (!$carpMember) {
                 continue;
             }
             $uuid = trim((string)($row['@attributes']['uuid'] ?? ''));

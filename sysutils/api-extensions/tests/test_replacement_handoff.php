@@ -344,6 +344,7 @@ $identity = [
     ],
     'carp_advskew' => [
         '33333333-aaaa-bbbb-cccc-333333333333' => 10,
+        '34343434-aaaa-bbbb-cccc-343434343434' => 0,
     ],
 ];
 
@@ -384,7 +385,7 @@ $endpointAlias = array_values(array_filter(
     fn($row) => ($row['@attributes']['uuid'] ?? '') === '34343434-aaaa-bbbb-cccc-343434343434'
 ))[0];
 rhEq('ipalias', $endpointAlias['mode'], 'VHID-bound IPv6 alias remains an IP alias during handoff');
-rhEq('100', $endpointAlias['advskew'], 'VHID-bound IPv6 alias is not treated as a CARP identity');
+rhEq('0', $endpointAlias['advskew'], 'VHID-bound IPv6 alias primary skew restored exactly from manifest');
 rhEq(true, count(array_filter(
     $etna['virtualip']['vip'],
     fn($row) => ($row['@attributes']['uuid'] ?? '') === 'abababab-abab-abab-abab-abababababab'
