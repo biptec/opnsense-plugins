@@ -474,4 +474,40 @@ $serializedEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_re
 $serializedCreate = HAProxySync::reconcile($serializedEmpty, $payload, nextFactory('serialized-uuid-'), nextFactory('serialized-id-'));
 eq(3, count(HAProxySync::replicas($serializedCreate['config'])), 'empty serialized replica container accepts first objects');
 
+$replicaHandoffPayload = HAProxySync::buildReplicaPayload($createdConfig, 'endpoint');
+eq(HAProxySync::validatePayload($payload), HAProxySync::validatePayload($replicaHandoffPayload), 'replacement source exports HAProxy replicas with the same semantic payload');
+$ownerIdentity = [
+    'healthcheck:hc-customer-example' => [
+        'object_uuid' => '11111111-1111-1111-1111-111111111111',
+        'assignment_uuid' => '21111111-1111-1111-1111-111111111111',
+    ],
+    'server:origin-customer-example' => [
+        'object_uuid' => '12222222-2222-2222-2222-222222222222',
+        'assignment_uuid' => '22222222-2222-2222-2222-222222222222',
+    ],
+    'backend:sni-customer.example' => [
+        'object_uuid' => '13333333-3333-3333-3333-333333333333',
+        'assignment_uuid' => '23333333-3333-3333-3333-333333333333',
+    ],
+];
+$owner = HAProxySync::reconcileAsOwner(
+    receiverBase(),
+    $replicaHandoffPayload,
+    $ownerIdentity,
+    nextFactory('temporary-owner-uuid-'),
+    nextFactory('temporary-owner-id-')
+);
+eq([], HAProxySync::replicas($owner['config']), 'replacement target does not retain HAProxy replica ownership');
+eq(3, count(HAProxySync::assignments($owner['config'])), 'replacement target promotes all HAProxy objects to local owner');
+$ownerHealthchecks = rows($owner['config']['OPNsense']['HAProxy']['healthchecks'], 'healthcheck');
+$ownerServers = rows($owner['config']['OPNsense']['HAProxy']['servers'], 'server');
+$ownerBackends = rows($owner['config']['OPNsense']['HAProxy']['backends'], 'backend');
+eq('11111111-1111-1111-1111-111111111111', $ownerHealthchecks[0]['@attributes']['uuid'], 'replacement restores original primary healthcheck UUID');
+eq('12222222-2222-2222-2222-222222222222', $ownerServers[0]['@attributes']['uuid'], 'replacement restores original primary server UUID');
+eq('13333333-3333-3333-3333-333333333333', $ownerBackends[0]['@attributes']['uuid'], 'replacement restores original primary backend UUID');
+eq('12222222-2222-2222-2222-222222222222', $ownerBackends[0]['linkedServers'], 'replacement backend relation remaps to restored primary server UUID');
+eq('11111111-1111-1111-1111-111111111111', $ownerBackends[0]['healthCheck'], 'replacement backend relation remaps to restored primary healthcheck UUID');
+eq(HAProxySync::validatePayload($replicaHandoffPayload), HAProxySync::validatePayload(HAProxySync::buildPayload($owner['config'])), 'promoted Etna owner can immediately drive the normal forward sync payload');
+bad(fn()=>HAProxySync::reconcileAsOwner($owner['config'], $replicaHandoffPayload, $ownerIdentity), 'replacement HAProxy ownership handoff is one-shot');
+
 fwrite(STDOUT, "HAProxy policy sync tests passed\n");
