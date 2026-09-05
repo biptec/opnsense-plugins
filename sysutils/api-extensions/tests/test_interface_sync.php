@@ -239,4 +239,21 @@ eq(true, str_contains($hook, "'sync_finalize' => 'api_extensions_haproxy_sync_fi
 eq(false, file_exists(__DIR__ . '/../src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php'), 'parallel config sync script removed');
 eq(false, file_exists(__DIR__ . '/../src/opnsense/mvc/app/controllers/OPNsense/ApiExtensions/Api/InterfaceSyncController.php'), 'parallel interface sync API controller removed');
 
+$replicaHandoffPayload = InterfaceSync::buildReplicaPayload($r['config'], 'endpoint');
+eq(InterfaceSync::validatePayload($payload), InterfaceSync::validatePayload($replicaHandoffPayload), 'replacement source exports endpoint replica with the same semantic payload');
+$ownerIdentity = [
+    'customer_net' => [
+        'vlan_uuid' => '11111111-1111-1111-1111-111111111111',
+        'assignment_uuid' => '22222222-2222-2222-2222-222222222222',
+    ],
+];
+$owner = InterfaceSync::reconcileAsOwner(base(), $replicaHandoffPayload, $ownerIdentity, fn()=> 'temporary-owner-uuid');
+eq('endpoint', InterfaceSync::assignments($owner['config'])['customer_net']['policy_id'], 'replacement target promotes interface to local owner');
+eq(false, isset(InterfaceSync::replicas($owner['config'])['customer_net']), 'replacement target does not retain replica ownership');
+eq('22222222-2222-2222-2222-222222222222', InterfaceSync::assignments($owner['config'])['customer_net']['@attributes']['uuid'], 'replacement target restores original primary assignment UUID');
+$ownerVlan = array_values(array_filter($owner['config']['vlans']['vlan'], fn($row)=>($row['vlanif'] ?? '') === 'vlan777'))[0];
+eq('11111111-1111-1111-1111-111111111111', $ownerVlan['@attributes']['uuid'], 'replacement target restores original primary VLAN UUID');
+eq(['customer_net'], $owner['plan']['promoted_owner_interfaces'], 'replacement plan reports promoted interface ownership');
+bad(fn()=>InterfaceSync::reconcileAsOwner($owner['config'], $replicaHandoffPayload, $ownerIdentity), 'replacement interface ownership handoff is one-shot');
+
 fwrite(STDOUT, "interface policy sync tests passed\n");
