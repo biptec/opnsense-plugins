@@ -212,16 +212,22 @@ function rhReplica(): array
             'action' => 'pass',
             'nosync' => '1',
         ],
+        [
+            '@attributes' => ['uuid' => '67676767-aaaa-bbbb-cccc-676767676767'],
+            'description' => 'Endpoint allow after local rule',
+            'interface' => 'ep_customer',
+            'action' => 'pass',
+        ],
     ]];
     $config['staticroutes'] = ['route' => [
         [
-            '@attributes' => ['uuid' => '77777777-aaaa-bbbb-cccc-777777777777'],
-            'network' => '203.0.113.0/24',
+            '@attributes' => ['uuid' => '12121212-1212-1212-1212-121212121212'],
+            'network' => '198.18.0.0/24',
             'gateway' => 'EP_GW',
         ],
         [
-            '@attributes' => ['uuid' => '12121212-1212-1212-1212-121212121212'],
-            'network' => '198.18.0.0/24',
+            '@attributes' => ['uuid' => '77777777-aaaa-bbbb-cccc-777777777777'],
+            'network' => '203.0.113.0/24',
             'gateway' => 'EP_GW',
         ],
     ]];
@@ -313,10 +319,12 @@ rhEq(1, $bundle['version'], 'replacement bundle version');
 rhEq(['virtualip', 'rules', 'staticroutes', 'aliases', 'users'], $bundle['native_items'], 'native allowlist is fixed');
 rhEq(['12121212-1212-1212-1212-121212121212'], $bundle['excluded_uuids'], 'Router-owned native UUID exclusions are explicit in the bundle');
 rhEq(1, count($bundle['native']['staticroutes']['route']), 'Router-owned syncable static route is excluded while consumer route remains');
+rhEq(true, array_is_list($bundle['native']['staticroutes']['route']), 'UUID pruning preserves native static route list shape');
 rhEq(1, count($bundle['interfaces']['interfaces']), 'one replica interface exported');
 rhEq(1, count($bundle['haproxy']['objects']), 'one replica HAProxy object exported');
 rhEq(2, count($bundle['native']['virtualip']['vip']), 'consumer CARP and VHID-bound IP alias exported while Rigi-local nosync VIP is excluded');
-rhEq(1, count($bundle['native']['OPNsense']['Firewall']['Filter']['rules']['rule']), 'Rigi-local nosync firewall rule excluded');
+rhEq(2, count($bundle['native']['OPNsense']['Firewall']['Filter']['rules']['rule']), 'Rigi-local nosync firewall rule excluded while later consumer rules remain');
+rhEq(true, array_is_list($bundle['native']['OPNsense']['Firewall']['Filter']['rules']['rule']), 'nosync pruning preserves native firewall rule list shape');
 rhEq(1, count($bundle['native']['gateways']['gateway_item']), 'Rigi-local nosync gateway excluded');
 
 $identity = [

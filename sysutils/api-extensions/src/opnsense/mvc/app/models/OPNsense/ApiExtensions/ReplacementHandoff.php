@@ -92,6 +92,7 @@ final class ReplacementHandoff
 
     private static function removeNoSync(array &$value): void
     {
+        $isList = array_is_list($value);
         foreach ($value as $key => &$row) {
             if (is_array($row) && !empty($row['nosync'])) {
                 unset($value[$key]);
@@ -102,6 +103,9 @@ final class ReplacementHandoff
             }
         }
         unset($row);
+        if ($isList) {
+            $value = array_values($value);
+        }
     }
 
     private static function virtualIpSection(array $config): array
@@ -142,6 +146,7 @@ final class ReplacementHandoff
         if ($excluded === []) {
             return;
         }
+        $isList = array_is_list($value);
         $set = array_fill_keys($excluded, true);
         foreach ($value as $key => &$row) {
             if (is_array($row)) {
@@ -154,6 +159,9 @@ final class ReplacementHandoff
             }
         }
         unset($row);
+        if ($isList) {
+            $value = array_values($value);
+        }
     }
 
     private static function buildNative(array $config, array $excludedUuids): array
