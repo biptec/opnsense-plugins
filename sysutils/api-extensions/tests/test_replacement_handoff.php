@@ -174,6 +174,17 @@ function rhReplica(): array
             'descr' => 'Endpoint CARP',
         ],
         [
+            '@attributes' => ['uuid' => '34343434-aaaa-bbbb-cccc-343434343434'],
+            'mode' => 'ipalias',
+            'interface' => 'ep_customer',
+            'subnet' => '2001:db8:77::1',
+            'subnet_bits' => '64',
+            'vhid' => '77',
+            'advbase' => '1',
+            'advskew' => '100',
+            'descr' => 'Endpoint IPv6 alias bound to CARP VHID',
+        ],
+        [
             '@attributes' => ['uuid' => '44444444-aaaa-bbbb-cccc-444444444444'],
             'mode' => 'carp',
             'interface' => 'core_wan',
@@ -304,7 +315,7 @@ rhEq(['12121212-1212-1212-1212-121212121212'], $bundle['excluded_uuids'], 'Route
 rhEq(1, count($bundle['native']['staticroutes']['route']), 'Router-owned syncable static route is excluded while consumer route remains');
 rhEq(1, count($bundle['interfaces']['interfaces']), 'one replica interface exported');
 rhEq(1, count($bundle['haproxy']['objects']), 'one replica HAProxy object exported');
-rhEq(1, count($bundle['native']['virtualip']['vip']), 'Rigi-local nosync VIP excluded');
+rhEq(2, count($bundle['native']['virtualip']['vip']), 'consumer CARP and VHID-bound IP alias exported while Rigi-local nosync VIP is excluded');
 rhEq(1, count($bundle['native']['OPNsense']['Firewall']['Filter']['rules']['rule']), 'Rigi-local nosync firewall rule excluded');
 rhEq(1, count($bundle['native']['gateways']['gateway_item']), 'Rigi-local nosync gateway excluded');
 
@@ -360,6 +371,12 @@ $endpointVip = array_values(array_filter(
     fn($row) => ($row['@attributes']['uuid'] ?? '') === '33333333-aaaa-bbbb-cccc-333333333333'
 ))[0];
 rhEq('10', $endpointVip['advskew'], 'primary CARP skew restored exactly from manifest');
+$endpointAlias = array_values(array_filter(
+    $etna['virtualip']['vip'],
+    fn($row) => ($row['@attributes']['uuid'] ?? '') === '34343434-aaaa-bbbb-cccc-343434343434'
+))[0];
+rhEq('ipalias', $endpointAlias['mode'], 'VHID-bound IPv6 alias remains an IP alias during handoff');
+rhEq('100', $endpointAlias['advskew'], 'VHID-bound IPv6 alias is not treated as a CARP identity');
 rhEq(true, count(array_filter(
     $etna['virtualip']['vip'],
     fn($row) => ($row['@attributes']['uuid'] ?? '') === 'abababab-abab-abab-abab-abababababab'

@@ -278,7 +278,7 @@ final class ReplacementHandoff
         }
         $seen = [];
         foreach ($vips as &$row) {
-            if (!is_array($row) || empty($row['vhid'])) {
+            if (!is_array($row) || trim((string)($row['mode'] ?? '')) !== 'carp') {
                 continue;
             }
             $uuid = trim((string)($row['@attributes']['uuid'] ?? ''));
