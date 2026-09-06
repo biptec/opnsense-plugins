@@ -54,6 +54,9 @@ jobs:
       - name: Run HAProxy policy synchronization tests
         run: php sysutils/api-extensions/tests/test_haproxy_sync.php
 
+      - name: Run replacement ownership handoff tests
+        run: php sysutils/api-extensions/tests/test_replacement_handoff.php
+
       - name: Run CARP health tests
         run: python3 -m unittest sysutils/api-extensions/tests/test_carp_health.py
 

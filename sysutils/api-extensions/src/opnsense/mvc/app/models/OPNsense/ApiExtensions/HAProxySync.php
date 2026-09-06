@@ -573,6 +573,91 @@ final class HAProxySync
         ];
     }
 
+    public static function buildReplicaPayload(array $config, string $policyId): array
+    {
+        if (!self::isEnabled($config)) {
+            self::fail('Policy-managed HAProxy Objects is not enabled in High Availability synchronization');
+        }
+        $policyId = trim($policyId);
+        $policies = InterfaceSync::policies($config);
+        if (!isset($policies[$policyId]) || !$policies[$policyId]['synchronize']) {
+            self::fail('replacement handoff policy must exist and be synchronized: ' . $policyId);
+        }
+        $replicas = self::replicas($config);
+        $inventory = self::inventory($config);
+        $objects = $inventory['objects'];
+        $selected = [];
+        foreach ($replicas as $key => $replica) {
+            if ($replica['policy_id'] !== $policyId) {
+                continue;
+            }
+            if (!isset($objects[$key])) {
+                self::fail(sprintf(
+                    'HAProxy replica ownership references missing %s %s',
+                    $replica['object_type'],
+                    $replica['object_name']
+                ));
+            }
+            $selected[$key] = true;
+        }
+
+        $payloadObjects = [];
+        foreach (self::OBJECT_TYPES as $type) {
+            foreach ($objects as $key => $object) {
+                if ($object['object_type'] !== $type || !isset($selected[$key])) {
+                    continue;
+                }
+                [$data, $linkedServerNames, $linkedHealthcheckName] = self::payloadData(
+                    $object['row'],
+                    $type,
+                    $inventory['server_uuid_to_name'],
+                    $inventory['healthcheck_uuid_to_name']
+                );
+                if ($type === 'backend') {
+                    foreach ($linkedServerNames as $serverName) {
+                        if (!isset($selected[self::objectKey('server', $serverName)])) {
+                            self::fail(sprintf(
+                                'HAProxy replica backend %s links server %s outside replacement handoff scope',
+                                $object['object_name'],
+                                $serverName
+                            ));
+                        }
+                    }
+                    if ($linkedHealthcheckName !== '' &&
+                        !isset($selected[self::objectKey('healthcheck', $linkedHealthcheckName)])) {
+                        self::fail(sprintf(
+                            'HAProxy replica backend %s links healthcheck %s outside replacement handoff scope',
+                            $object['object_name'],
+                            $linkedHealthcheckName
+                        ));
+                    }
+                }
+                $payloadObjects[] = [
+                    'object_type' => $type,
+                    'object_name' => $object['object_name'],
+                    'policy_id' => $replicas[$key]['policy_id'],
+                    'data' => $data,
+                    'linked_server_names' => $linkedServerNames,
+                    'linked_healthcheck_name' => $linkedHealthcheckName,
+                ];
+            }
+        }
+
+        $payloadPolicies = [];
+        foreach ($policies as $policy) {
+            $payloadPolicies[] = [
+                'id' => $policy['id'],
+                'description' => $policy['description'],
+                'synchronize' => $policy['synchronize'],
+            ];
+        }
+        return [
+            'version' => self::VERSION,
+            'policies' => $payloadPolicies,
+            'objects' => $payloadObjects,
+        ];
+    }
+
     public static function validatePayload($payload): array
     {
         if (!is_array($payload) ||
@@ -753,6 +838,117 @@ final class HAProxySync
             }
         }
         return [$uuid, $id];
+    }
+
+    public static function reconcileAsOwner(
+        array $config,
+        $payload,
+        array $identityByObject,
+        ?callable $uuidFactory = null,
+        ?callable $idFactory = null
+    ): array {
+        $payload = self::validatePayload($payload);
+        $desired = [];
+        foreach ($payload['objects'] as $row) {
+            $desired[self::objectKey($row['object_type'], $row['object_name'])] = $row;
+        }
+        if (array_diff(array_keys($desired), array_keys($identityByObject)) ||
+            array_diff(array_keys($identityByObject), array_keys($desired))) {
+            self::fail('replacement HAProxy identity manifest must match the replica payload exactly');
+        }
+        $assignments = self::assignments($config);
+        $replicas = self::replicas($config);
+        foreach ($desired as $key => $row) {
+            if (isset($assignments[$key]) || isset($replicas[$key])) {
+                self::fail('replacement ownership handoff target already owns or replicates HAProxy object ' . $key);
+            }
+            $identity = $identityByObject[$key];
+            if (!is_array($identity)) {
+                self::fail('invalid replacement HAProxy identity record for ' . $key);
+            }
+            foreach (['object_uuid', 'assignment_uuid'] as $field) {
+                $value = trim((string)($identity[$field] ?? ''));
+                if (!preg_match('/^[0-9A-Fa-f-]{16,64}$/D', $value)) {
+                    self::fail(sprintf('invalid replacement %s for HAProxy object %s', $field, $key));
+                }
+            }
+        }
+
+        $result = self::reconcile($config, $payload, $uuidFactory, $idFactory);
+        $next = $result['config'];
+        $inventory = self::inventory($next);
+        $uuidRemap = [];
+        foreach ($desired as $key => $_) {
+            if (!isset($inventory['objects'][$key])) {
+                self::fail('replacement ownership handoff could not resolve HAProxy object ' . $key);
+            }
+            $oldUuid = trim((string)($inventory['objects'][$key]['row']['@attributes']['uuid'] ?? ''));
+            if ($oldUuid === '') {
+                self::fail('replacement ownership handoff HAProxy object is missing local UUID: ' . $key);
+            }
+            $uuidRemap[$oldUuid] = trim((string)$identityByObject[$key]['object_uuid']);
+        }
+
+        foreach (self::OBJECT_TYPES as $type) {
+            $rows = self::haProxyRows($next, $type);
+            foreach ($rows as &$row) {
+                $name = self::objectName($row['name'] ?? '');
+                $key = self::objectKey($type, $name);
+                if (isset($desired[$key])) {
+                    $row['@attributes'] = ['uuid' => trim((string)$identityByObject[$key]['object_uuid'])];
+                }
+                if ($type === 'backend') {
+                    $linked = [];
+                    foreach (self::relationValues($row['linkedServers'] ?? null) as $uuid) {
+                        $linked[] = $uuidRemap[$uuid] ?? $uuid;
+                    }
+                    $row['linkedServers'] = implode(',', $linked);
+                    $healthchecks = self::relationValues($row['healthCheck'] ?? null);
+                    if (count($healthchecks) > 1) {
+                        self::fail('HAProxy backend contains multiple health monitor relations during replacement handoff');
+                    }
+                    $row['healthCheck'] = $healthchecks === [] ? '' : ($uuidRemap[$healthchecks[0]] ?? $healthchecks[0]);
+                }
+            }
+            unset($row);
+            self::setHAProxyRows($next, $type, $rows);
+        }
+
+        $policies = InterfaceSync::policies($next);
+        $assignmentRows = self::assignmentRowsRaw($next);
+        foreach ($desired as $key => $row) {
+            $policyId = $row['policy_id'];
+            if (!isset($policies[$policyId]) || !$policies[$policyId]['synchronize']) {
+                self::fail('replacement ownership handoff target is missing synchronized policy ' . $policyId);
+            }
+            $assignmentRows[] = [
+                '@attributes' => ['uuid' => trim((string)$identityByObject[$key]['assignment_uuid'])],
+                'object_type' => $row['object_type'],
+                'object_name' => $row['object_name'],
+                'policy_id' => $policies[$policyId]['uuid'],
+            ];
+        }
+        self::setAssignmentRows($next, $assignmentRows);
+
+        $replicaRows = [];
+        foreach (self::replicas($next) as $key => $row) {
+            if (isset($desired[$key])) {
+                continue;
+            }
+            $replicaRows[] = [
+                '@attributes' => $row['@attributes'],
+                'object_type' => $row['object_type'],
+                'object_name' => $row['object_name'],
+                'policy_id' => $row['policy_id'],
+            ];
+        }
+        self::setReplicaRows($next, $replicaRows);
+
+        $result['config'] = $next;
+        $result['changed'] = $next !== $config;
+        $result['plan']['promoted_owner_objects'] = array_keys($desired);
+        sort($result['plan']['promoted_owner_objects']);
+        return $result;
     }
 
     public static function reconcile(

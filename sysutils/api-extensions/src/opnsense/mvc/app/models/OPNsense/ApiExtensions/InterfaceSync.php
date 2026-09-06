@@ -343,6 +343,49 @@ final class InterfaceSync
         ];
     }
 
+    public static function buildReplicaPayload(array $config, string $policyId, bool $prune = true): array
+    {
+        if (!self::isEnabled($config)) {
+            self::fail('Policy-managed Interfaces / VLANs is not enabled in High Availability synchronization');
+        }
+        $policyId = self::policyId($policyId);
+        $interfaces = $config['interfaces'] ?? [];
+        if (!is_array($interfaces)) {
+            self::fail('interfaces must be an array');
+        }
+        $vlans = self::vlanMap($config);
+        $policies = self::policies($config);
+        if (!isset($policies[$policyId]) || !$policies[$policyId]['synchronize']) {
+            self::fail('replacement handoff policy must exist and be synchronized: ' . $policyId);
+        }
+        $replicas = self::replicas($config);
+        $out = [];
+        foreach ($replicas as $id => $replica) {
+            if ($replica['policy_id'] !== $policyId) {
+                continue;
+            }
+            if (!isset($interfaces[$id]) || !is_array($interfaces[$id])) {
+                self::fail(sprintf('replica ownership references missing interface %s', $id));
+            }
+            $out[] = self::sourceInterface($id, $replica['policy_id'], $interfaces[$id], $vlans);
+        }
+        usort($out, fn($a, $b) => strcmp($a['identifier'], $b['identifier']));
+        $payloadPolicies = [];
+        foreach ($policies as $policy) {
+            $payloadPolicies[] = [
+                'id' => $policy['id'],
+                'description' => $policy['description'],
+                'synchronize' => $policy['synchronize'],
+            ];
+        }
+        return [
+            'version' => self::VERSION,
+            'policies' => $payloadPolicies,
+            'interfaces' => $out,
+            'prune' => $prune,
+        ];
+    }
+
     public static function validatePayload($payload): array
     {
         if (!is_array($payload) || array_diff(array_keys($payload), ['version', 'policies', 'interfaces', 'prune']) ||
@@ -652,6 +695,100 @@ final class InterfaceSync
             'desired' => count($desired),
             'retained_local' => count($keep) - count($desired),
         ];
+    }
+
+    public static function reconcileAsOwner(
+        array $config,
+        $payload,
+        array $identityByInterface,
+        ?callable $uuidFactory = null
+    ): array {
+        $payload = self::validatePayload($payload);
+        $desired = [];
+        foreach ($payload['interfaces'] as $row) {
+            $desired[$row['identifier']] = $row;
+        }
+        if (array_diff(array_keys($desired), array_keys($identityByInterface)) ||
+            array_diff(array_keys($identityByInterface), array_keys($desired))) {
+            self::fail('replacement interface identity manifest must match the replica payload exactly');
+        }
+
+        $assignments = self::assignments($config);
+        $replicas = self::replicas($config);
+        foreach ($desired as $id => $_) {
+            if (isset($assignments[$id]) || isset($replicas[$id])) {
+                self::fail('replacement ownership handoff target already owns or replicates interface ' . $id);
+            }
+            $identity = $identityByInterface[$id];
+            if (!is_array($identity)) {
+                self::fail('invalid replacement interface identity record for ' . $id);
+            }
+            foreach (['vlan_uuid', 'assignment_uuid'] as $field) {
+                $value = trim((string)($identity[$field] ?? ''));
+                if (!preg_match('/^[0-9A-Fa-f-]{16,64}$/D', $value)) {
+                    self::fail(sprintf('invalid replacement %s for interface %s', $field, $id));
+                }
+            }
+        }
+
+        $result = self::reconcile($config, $payload, $uuidFactory);
+        $next = $result['config'];
+        $deviceToId = [];
+        foreach ($desired as $id => $row) {
+            $deviceToId[$row['device']] = $id;
+        }
+        $vlans = self::vlanList($next);
+        $seenVlans = [];
+        foreach ($vlans as &$vlan) {
+            $device = trim((string)($vlan['vlanif'] ?? ''));
+            if (!isset($deviceToId[$device])) {
+                continue;
+            }
+            $id = $deviceToId[$device];
+            $vlan['@attributes'] = ['uuid' => trim((string)$identityByInterface[$id]['vlan_uuid'])];
+            $seenVlans[$id] = true;
+        }
+        unset($vlan);
+        foreach ($desired as $id => $_) {
+            if (!isset($seenVlans[$id])) {
+                self::fail('replacement ownership handoff could not resolve VLAN for interface ' . $id);
+            }
+        }
+        $next['vlans']['vlan'] = array_values($vlans);
+
+        $policies = self::policies($next);
+        $assignmentRows = self::assignmentRowsRaw($next);
+        foreach ($desired as $id => $row) {
+            $policyId = $row['policy_id'];
+            if (!isset($policies[$policyId]) || !$policies[$policyId]['synchronize']) {
+                self::fail('replacement ownership handoff target is missing synchronized policy ' . $policyId);
+            }
+            $assignmentRows[] = [
+                '@attributes' => ['uuid' => trim((string)$identityByInterface[$id]['assignment_uuid'])],
+                'interface' => $id,
+                'policy_id' => $policies[$policyId]['uuid'],
+            ];
+        }
+        self::setAssignmentRows($next, $assignmentRows);
+
+        $replicaRows = [];
+        foreach (self::replicas($next) as $id => $row) {
+            if (isset($desired[$id])) {
+                continue;
+            }
+            $replicaRows[] = [
+                '@attributes' => $row['@attributes'],
+                'interface' => $id,
+                'policy_id' => $row['policy_id'],
+            ];
+        }
+        self::setReplicaRows($next, $replicaRows);
+
+        $result['config'] = $next;
+        $result['changed'] = $next !== $config;
+        $result['plan']['promoted_owner_interfaces'] = array_keys($desired);
+        sort($result['plan']['promoted_owner_interfaces']);
+        return $result;
     }
 
     public static function reconcile(array $config, $payload, ?callable $uuidFactory = null): array
