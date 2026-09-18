@@ -84,6 +84,33 @@ def parse_route_get(output):
     return result
 
 
+def parse_kernel_routes(output, family):
+    """Parse a FreeBSD netstat routing table into exact prefix lookups."""
+    routes = {}
+    max_prefixlen = 128 if family == 6 else 32
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 6 or fields[0] in {"Destination", "Routing", "Internet:", "Internet6:"}:
+            continue
+        destination, gateway = fields[0], fields[1]
+        if "%" in destination:
+            continue
+        try:
+            if destination == "default":
+                prefix = "::/0" if family == 6 else "0.0.0.0/0"
+            elif "/" in destination:
+                prefix = str(ipaddress.ip_network(destination, strict=False))
+            else:
+                prefix = str(ipaddress.ip_network(f"{destination}/{max_prefixlen}", strict=False))
+        except ValueError:
+            continue
+        routes[(family, prefix)] = {
+            "gateway": "" if gateway.startswith("link#") else gateway,
+            "interface": fields[5],
+        }
+    return routes
+
+
 def parse_ospf_nexthop(payload, prefix, family):
     protocol = "ospf6" if family == 6 else "ospf"
     for route in payload.get(prefix, []):
@@ -114,14 +141,23 @@ def load_state(path=STATE_PATH):
 
 
 def save_state(routes, path=STATE_PATH):
+    payload = {"routes": routes}
+    try:
+        with open(path, encoding="utf-8") as stream:
+            if json.load(stream) == payload:
+                return False
+    except (OSError, ValueError, TypeError):
+        pass
+
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".frr-carp-connected-", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump({"routes": routes}, stream, indent=2, sort_keys=True)
+            json.dump(payload, stream, indent=2, sort_keys=True)
             stream.write("\n")
         os.replace(temporary, path)
+        return True
     finally:
         try:
             os.unlink(temporary)
@@ -152,6 +188,33 @@ class ConnectedCarpReconciler:
         except (ValueError, TypeError):
             return None
         return parse_ospf_nexthop(payload, prefix, family)
+
+    def _ospf_snapshots(self, families):
+        snapshots = {}
+        for family in sorted(set(families)):
+            command = "show ipv6 route ospf6 json" if family == 6 else "show ip route ospf json"
+            result = self.command(["/usr/local/bin/vtysh", "-c", command])
+            if result.returncode != 0:
+                continue
+            try:
+                payload = json.loads(result.stdout)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict):
+                snapshots[family] = payload
+        return snapshots
+
+    def _kernel_snapshots(self, families):
+        routes = {}
+        loaded = set()
+        for family in sorted(set(families)):
+            address_family = "inet6" if family == 6 else "inet"
+            result = self.command(["/usr/bin/netstat", "-rnW", "-f", address_family])
+            if result.returncode != 0:
+                continue
+            routes.update(parse_kernel_routes(result.stdout, family))
+            loaded.add(family)
+        return routes, loaded
 
     def _delete_route(self, prefix, family, gateway=""):
         command = ["/sbin/route", "delete"]
@@ -192,6 +255,7 @@ class ConnectedCarpReconciler:
             by_key[key] = next((item for item in members if item["state"] == "master"), members[0])
         previous = {(int(item["family"]), item["network"]): item for item in load_state(self.state_path)}
         desired = {}
+        backups = []
 
         for key, members in grouped.items():
             # A subnet can host multiple CARP VHIDs.  The direct path remains
@@ -200,9 +264,20 @@ class ConnectedCarpReconciler:
             if any(item["state"] == "master" for item in members):
                 continue
             item = next((item for item in members if item["state"] == "backup"), None)
-            if item is None:
-                continue
-            learned = self._ospf_route(item["network"], item["family"])
+            if item is not None:
+                backups.append((key, item))
+
+        # A stable BACKUP router can carry dozens of CARP prefixes. Query FRR
+        # once per address family instead of starting one vtysh process for
+        # every prefix on every two-second monitor tick.
+        ospf_snapshots = self._ospf_snapshots(item["family"] for _, item in backups)
+        for key, item in backups:
+            payload = ospf_snapshots.get(item["family"])
+            learned = (
+                parse_ospf_nexthop(payload, item["network"], item["family"])
+                if payload is not None
+                else self._ospf_route(item["network"], item["family"])
+            )
             if learned is None or learned["interface"] == item["interface"]:
                 continue
             desired[key] = {
@@ -213,6 +288,18 @@ class ConnectedCarpReconciler:
                 "carp_interface": item["interface"],
                 "vhid": item["vhid"],
             }
+
+        kernel_families = {family for family, _ in set(previous) | set(desired)}
+        kernel_routes, kernel_loaded = self._kernel_snapshots(kernel_families)
+
+        def current_route(prefix, family):
+            if family in kernel_loaded:
+                current = kernel_routes.get((family, prefix))
+                if current is not None:
+                    return current
+                # Confirm an apparent miss with route(8), so an unexpected
+                # netstat format can never make us overwrite an existing route.
+            return self._kernel_route(prefix, family)
 
         actions = []
         retained = {}
@@ -243,36 +330,40 @@ class ConnectedCarpReconciler:
                 if now - missing_since < MISSING_OSPF_GRACE:
                     retained[key] = old
                     continue
-            current = self._kernel_route(old["network"], int(old["family"]))
+            family = int(old["family"])
+            current = current_route(old["network"], family)
             if current is not None and current.get("gateway") == old.get("gateway"):
-                result = self._delete_route(old["network"], int(old["family"]), old.get("gateway", ""))
+                result = self._delete_route(old["network"], family, old.get("gateway", ""))
                 if result.returncode != 0:
                     retained[key] = old
                     continue
+                kernel_routes.pop((family, old["network"]), None)
                 actions.append({"action": "delete-fallback", **old})
 
             carp = by_key.get(key)
             if carp is not None and carp.get("state") == "master":
-                current = self._kernel_route(old["network"], int(old["family"]))
+                current = current_route(old["network"], family)
                 if current is None:
-                    result = self._restore_connected_route(old["network"], int(old["family"]), carp["interface"])
+                    result = self._restore_connected_route(old["network"], family, carp["interface"])
                     if result.returncode != 0:
                         # Keep enough ownership state to retry the MASTER
                         # restoration on the next event.
                         retained[key] = old
                         continue
+                    kernel_routes[(family, old["network"])] = {"gateway": "", "interface": carp["interface"]}
                     actions.append({"action": "restore-connected", "family": old["family"], "network": old["network"], "carp_interface": carp["interface"]})
 
         # Then install the currently desired peer routes.  Only record a route
         # as managed after it is actually present in the kernel.
         for key, new in desired.items():
+            family = int(new["family"])
             if key in retained and retained[key].get("gateway") == new["gateway"]:
-                current = self._kernel_route(new["network"], int(new["family"]))
+                current = current_route(new["network"], family)
                 if current is not None and current.get("gateway") == new["gateway"]:
                     continue
                 retained.pop(key, None)
 
-            current = self._kernel_route(new["network"], int(new["family"]))
+            current = current_route(new["network"], family)
             if current is not None and current.get("gateway") == new["gateway"]:
                 new.pop("missing_since", None)
                 retained[key] = new
@@ -287,13 +378,15 @@ class ConnectedCarpReconciler:
                 # no-gateway route on another interface is not ours to touch.
                 if current.get("interface") != new["carp_interface"]:
                     continue
-                result = self._delete_route(new["network"], int(new["family"]))
+                result = self._delete_route(new["network"], family)
                 if result.returncode != 0:
                     continue
+                kernel_routes.pop((family, new["network"]), None)
                 actions.append({"action": "delete-connected", "family": new["family"], "network": new["network"], "carp_interface": new["carp_interface"]})
-            result = self._add_gateway_route(new["network"], int(new["family"]), new["gateway"])
+            result = self._add_gateway_route(new["network"], family, new["gateway"])
             if result.returncode != 0:
                 continue
+            kernel_routes[(family, new["network"])] = {"gateway": new["gateway"], "interface": new["ospf_interface"]}
             actions.append({"action": "add-fallback", **new})
             retained[key] = new
 
@@ -317,28 +410,38 @@ class ConnectedCarpReconciler:
         grouped = {}
         for item in items:
             grouped.setdefault((item["family"], item["network"]), []).append(item)
+        kernel_routes, kernel_loaded = self._kernel_snapshots(key[0] for key in previous)
+
+        def current_route(prefix, family):
+            if family in kernel_loaded:
+                current = kernel_routes.get((family, prefix))
+                if current is not None:
+                    return current
+            return self._kernel_route(prefix, family)
 
         actions = []
         retained = {}
         for key, old in previous.items():
             family = int(old["family"])
-            current = self._kernel_route(old["network"], family)
+            current = current_route(old["network"], family)
             if current is not None and current.get("gateway") == old.get("gateway"):
                 result = self._delete_route(old["network"], family, old.get("gateway", ""))
                 if result.returncode != 0:
                     retained[key] = old
                     continue
+                kernel_routes.pop((family, old["network"]), None)
                 actions.append({"action": "delete-fallback", **old})
 
             members = grouped.get(key, [])
             master = next((item for item in members if item.get("state") == "master"), None)
             if master is not None:
-                current = self._kernel_route(old["network"], family)
+                current = current_route(old["network"], family)
                 if current is None:
                     result = self._restore_connected_route(old["network"], family, master["interface"])
                     if result.returncode != 0:
                         retained[key] = old
                         continue
+                    kernel_routes[(family, old["network"])] = {"gateway": "", "interface": master["interface"]}
                     actions.append({"action": "restore-connected", "family": family, "network": old["network"], "carp_interface": master["interface"]})
 
         save_state(list(retained.values()), self.state_path)

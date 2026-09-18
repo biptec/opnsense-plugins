@@ -55,13 +55,10 @@ class FakeCommands:
         if command[:2] == ["/usr/local/bin/vtysh", "-c"]:
             raw = command[-1]
             family = 6 if raw.startswith("show ipv6") else 4
-            prefix = raw.split()[3]
-            route = self.ospf.get((family, prefix))
-            if route is None:
-                return subprocess.CompletedProcess(command, 0, "{}", "")
             protocol = "ospf6" if family == 6 else "ospf"
-            payload = {
-                prefix: [
+
+            def route_payload(prefix, route):
+                return [
                     {
                         "protocol": protocol,
                         "nexthops": [
@@ -78,8 +75,28 @@ class FakeCommands:
                         "nexthops": [{"active": True, "interfaceName": "vlan3990"}],
                     },
                 ]
-            }
+
+            if raw in {"show ip route ospf json", "show ipv6 route ospf6 json"}:
+                payload = {
+                    prefix: route_payload(prefix, route)
+                    for (route_family, prefix), route in self.ospf.items()
+                    if route_family == family
+                }
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+            prefix = raw.split()[3]
+            route = self.ospf.get((family, prefix))
+            payload = {} if route is None else {prefix: route_payload(prefix, route)}
             return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+        if command[:3] == ["/usr/bin/netstat", "-rnW", "-f"]:
+            family = 6 if command[-1] == "inet6" else 4
+            lines = ["Routing tables", "", "Internet6:" if family == 6 else "Internet:", "Destination Gateway Flags Nhop# Mtu Netif Expire"]
+            for (route_family, prefix), route in sorted(self.routes.items()):
+                if route_family != family:
+                    continue
+                gateway = route["gateway"] or "link#7"
+                lines.append(f"{prefix} {gateway} UGS 1 1500 {route['interface']}")
+            return subprocess.CompletedProcess(command, 0, "\n".join(lines) + "\n", "")
         if command[:2] == ["/sbin/route", "delete"]:
             if self.fail_delete:
                 return subprocess.CompletedProcess(command, 1, "", "delete failed")
@@ -104,6 +121,23 @@ class FakeCommands:
 
 
 class ConnectedCarpFallbackTest(unittest.TestCase):
+    def test_parse_kernel_routes_reads_gateway_and_direct_routes(self):
+        output = """\
+Routing tables
+
+Internet:
+Destination        Gateway            Flags   Nhop#    Mtu            Netif Expire
+10.250.99.0/30     10.250.99.5        UGS        14   1500         vlan3991
+192.0.2.0/24       link#7             U           4   1500         vlan3990
+"""
+        self.assertEqual(
+            CONNECTED.parse_kernel_routes(output, 4),
+            {
+                (4, "10.250.99.0/30"): {"gateway": "10.250.99.5", "interface": "vlan3991"},
+                (4, "192.0.2.0/24"): {"gateway": "", "interface": "vlan3990"},
+            },
+        )
+
     def test_parse_carp_prefixes_keeps_interface_scoped_state(self):
         got = CONNECTED.parse_carp_prefixes(IFCONFIG_BACKUP)
         self.assertEqual(
@@ -124,6 +158,31 @@ class ConnectedCarpFallbackTest(unittest.TestCase):
             self.assertEqual(sum(item["action"] == "add-fallback" for item in actions), 2)
             stored = CONNECTED.load_state(state)
             self.assertEqual(len(stored), 2)
+
+    def test_stable_backup_uses_bulk_snapshots_without_per_prefix_route_queries(self):
+        commands = FakeCommands()
+        with tempfile.TemporaryDirectory() as td:
+            state = str(Path(td) / "state.json")
+            reconciler = CONNECTED.ConnectedCarpReconciler(commands, state)
+            reconciler.reconcile(IFCONFIG_BACKUP)
+            commands.calls.clear()
+            actions = reconciler.reconcile(IFCONFIG_BACKUP)
+            self.assertEqual(actions, [])
+            self.assertEqual(
+                [call for call in commands.calls if call[:2] == ["/usr/local/bin/vtysh", "-c"]],
+                [
+                    ["/usr/local/bin/vtysh", "-c", "show ip route ospf json"],
+                    ["/usr/local/bin/vtysh", "-c", "show ipv6 route ospf6 json"],
+                ],
+            )
+            self.assertEqual(
+                [call for call in commands.calls if call[:3] == ["/usr/bin/netstat", "-rnW", "-f"]],
+                [
+                    ["/usr/bin/netstat", "-rnW", "-f", "inet"],
+                    ["/usr/bin/netstat", "-rnW", "-f", "inet6"],
+                ],
+            )
+            self.assertFalse(any(call[:3] == ["/sbin/route", "-n", "get"] for call in commands.calls))
 
     def test_master_removes_managed_fallback_and_restores_connected_routes(self):
         commands = FakeCommands()
