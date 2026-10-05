@@ -25,6 +25,14 @@ SUPERVISOR_PID = "/var/run/api_extensions_carp_health.supervisor.pid"
 _stop = False
 
 
+def reconcile_service_status(global_report, last_global):
+    if global_report == last_global:
+        return last_global
+    if trigger_carp_service_status():
+        return global_report
+    return last_global
+
+
 def stop_handler(signum, frame):
     global _stop
     _stop = True
@@ -64,9 +72,7 @@ def run_loop():
             global_state.get("ready", False),
             global_state.get("healthy", False),
         )
-        if global_report != last_global:
-            trigger_carp_service_status()
-            last_global = global_report
+        last_global = reconcile_service_status(global_report, last_global)
         elapsed = time.monotonic() - started
         time.sleep(max(0.1, config.interval - elapsed))
     return 0
