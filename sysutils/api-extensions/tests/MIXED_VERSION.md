@@ -23,11 +23,24 @@ python3 sysutils/api-extensions/tests/generate_legacy_v2.py
 python3 sysutils/api-extensions/tests/generate_legacy_v2.py --check
 ```
 
-Run acceptance in PHP 8.3:
+Run acceptance in PHP 8.3. When PHP is not installed in the Coder
+workspace, use an isolated ephemeral container instead. From the Plugins
+repository root:
 
 ```sh
-php sysutils/api-extensions/tests/test_endpoint_sync.php
-php sysutils/api-extensions/tests/test_haproxy_sync.php
+tar -c \
+  sysutils/api-extensions/tests/test_endpoint_sync.php \
+  sysutils/api-extensions/tests/test_interface_sync.php \
+  sysutils/api-extensions/tests/test_mixed_version_v2.php \
+  sysutils/api-extensions/tests/test_haproxy_sync.php \
+  sysutils/api-extensions/tests/legacy_etna_v2_payload.json \
+  sysutils/api-extensions/src/opnsense/mvc/app/models/OPNsense/ApiExtensions/InterfaceSync.php \
+  sysutils/api-extensions/src/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxySync.php \
+  sysutils/api-extensions/src/etc/inc/plugins.inc.d/api_extensions.inc \
+  | docker run --rm --network none --memory 128m -i php:8.3-cli-alpine \
+      sh -ec 'mkdir -p /qa; tar -xf - -C /qa; cd /qa; \
+        php sysutils/api-extensions/tests/test_endpoint_sync.php; \
+        php sysutils/api-extensions/tests/test_haproxy_sync.php'
 ```
 
 `test_endpoint_sync.php` now includes the mixed-version test. The test covers:
