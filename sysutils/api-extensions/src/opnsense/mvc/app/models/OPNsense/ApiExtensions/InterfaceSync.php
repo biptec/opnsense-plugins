@@ -689,8 +689,20 @@ final class InterfaceSync
             ];
         }
 
-        ksort($keep);
-        self::setPolicyRows($config, array_values($keep));
+        // Preserve existing local MVC row order: sorting policies on each
+        // synchronize would cause needless config changes on the old sender
+        // when the new peer immediately synchronizes back.
+        $ordered = [];
+        foreach ($current as $id => $_) {
+            if (isset($keep[$id])) {
+                $ordered[] = $keep[$id];
+                unset($keep[$id]);
+            }
+        }
+        foreach ($keep as $row) {
+            $ordered[] = $row;
+        }
+        self::setPolicyRows($config, $ordered);
         return [
             'desired' => count($desired),
             'retained_local' => count($keep) - count($desired),
@@ -791,6 +803,17 @@ final class InterfaceSync
         return $result;
     }
 
+    /**
+     * Apply a policy-selected interface scaffold from either HA peer.
+     *
+     * There is no "owner" or "replica" state. Existing assignments with
+     * synchronize=true define the receiver's managed scope; the incoming
+     * payload defines the desired scope. Assignments with a local-only policy
+     * are immutable and cannot be overwritten or pruned.
+     *
+     * The caller invokes this twice: prepare(prune=false) before native VIP/
+     * firewall synchronization and finalize(prune=true) after it.
+     */
     public static function reconcile(array $config, $payload, ?callable $uuidFactory = null): array
     {
         $payload = self::validatePayload($payload);
@@ -802,36 +825,32 @@ final class InterfaceSync
         }
         $vlans = self::vlanList($config);
         $vmap = self::vlanMap($config);
-        $replicas = self::replicas($config);
-        $localAssignments = self::assignments($config);
+        $policies = self::policies($config);
+        $assignments = self::assignments($config);
 
-        $desired = $desiredDevices = [];
+        $desired = [];
         foreach ($payload['interfaces'] as $row) {
             $desired[$row['identifier']] = $row;
-            $desiredDevices[$row['device']] = true;
-        }
-
-        // Existing dual-node objects are adopted only when the receiver has an explicit
-        // local assignment with the same policy. No interface-name convention participates.
-        $adoptedLocal = [];
-        foreach ($desired as $id => $row) {
-            if (isset($replicas[$id])) {
-                continue;
-            }
-            if (isset($localAssignments[$id])) {
-                if ($localAssignments[$id]['policy_id'] !== $row['policy_id']) {
-                    self::fail(sprintf(
-                        'cannot adopt interface %s: local policy %s differs from peer policy %s',
-                        $id,
-                        $localAssignments[$id]['policy_id'],
-                        $row['policy_id']
-                    ));
-                }
-                $adoptedLocal[$id] = $localAssignments[$id];
+            if (isset($assignments[$row['identifier']]) &&
+                $assignments[$row['identifier']]['policy_id'] !== $row['policy_id']) {
+                self::fail(sprintf(
+                    'interface %s policy conflict: target %s, source %s',
+                    $row['identifier'],
+                    $assignments[$row['identifier']]['policy_id'],
+                    $row['policy_id']
+                ));
             }
         }
 
-        $managed = $replicas + $adoptedLocal;
+        // This is the full mutable scope on the receiver, independent of
+        // whether the assignments were originally created by Terraform or HA.
+        $managed = [];
+        foreach ($assignments as $id => $row) {
+            if ($policies[$row['policy_id']]['synchronize']) {
+                $managed[$id] = $row;
+            }
+        }
+
         $current = $currentDevices = $otherDevices = [];
         foreach ($interfaces as $id => $ifc) {
             if (!is_array($ifc)) {
@@ -850,7 +869,7 @@ final class InterfaceSync
 
         foreach ($desired as $id => $row) {
             if (isset($interfaces[$id]) && !isset($managed[$id])) {
-                self::fail(sprintf('policy-managed interface identifier %s is already owned locally', $id));
+                self::fail(sprintf('policy-managed interface %s collides with a local-only interface', $id));
             }
             if (isset($otherDevices[$row['device']])) {
                 self::fail(sprintf(
@@ -878,15 +897,18 @@ final class InterfaceSync
                 unset($next['interfaces'][$id]);
             }
         }
+
         $reset = $configureIf = [];
         foreach ($desired as $id => $row) {
             $next['interfaces'][$id] = [
-                'if' => $row['device'], 'descr' => $row['description'], 'lock' => '0', 'enable' => '1',
+                'if' => $row['device'], 'descr' => $row['description'],
+                'lock' => '0', 'enable' => '1',
             ];
             $old = $current[$id] ?? null;
             if ($old === null) {
                 $configureIf[] = $id;
-            } elseif (trim((string)($old['if'] ?? '')) !== $row['device'] || !self::flag($old['enable'] ?? null)) {
+            } elseif (trim((string)($old['if'] ?? '')) !== $row['device'] ||
+                !self::flag($old['enable'] ?? null)) {
                 $reset[] = $configureIf[] = $id;
             }
         }
@@ -910,6 +932,7 @@ final class InterfaceSync
                 $kept[] = $vlan;
             }
         }
+
         $configureVlan = [];
         foreach ($desired as $row) {
             $old = $vmap[$row['device']] ?? null;
@@ -926,45 +949,38 @@ final class InterfaceSync
                 $configureVlan[] = $row['device'];
             }
             $kept[] = [
-                '@attributes' => ['uuid' => $uuid],
-                'if' => $parent,
-                'tag' => (string)$row['tag'],
-                'pcp' => '0',
-                'proto' => '',
-                'descr' => $row['description'],
+                '@attributes' => ['uuid' => $uuid], 'if' => $parent,
+                'tag' => (string)$row['tag'], 'pcp' => '0',
+                'proto' => '', 'descr' => $row['description'],
                 'vlanif' => $row['device'],
             ];
         }
         $next['vlans']['vlan'] = array_values($kept);
 
-        // Convert an explicitly matching legacy local assignment into HA-replica ownership.
-        if ($adoptedLocal !== []) {
-            $remainingAssignments = [];
-            foreach (self::assignmentRowsRaw($next) as $row) {
-                $id = trim((string)($row['interface'] ?? ''));
-                if (!isset($adoptedLocal[$id])) {
-                    $remainingAssignments[] = $row;
-                }
+        // Retain local policy assignments. During prepare, hold assignments
+        // for resources about to be removed; finalize prunes them. UUIDs of
+        // existing assignments remain stable across consecutive updates.
+        $assignmentRows = [];
+        foreach (self::assignmentRowsRaw($config) as $row) {
+            $id = self::interfaceId($row['interface'] ?? '');
+            if (isset($managed[$id]) && ($payload['prune'] || isset($desired[$id]))) {
+                continue;
             }
-            self::setAssignmentRows($next, $remainingAssignments);
+            $assignmentRows[] = $row;
         }
+        self::setAssignmentRows($next, $assignmentRows);
 
-        // Replica ownership is the only authority for destructive prune on the receiver.
-        // During prepare, stale replicas stay registered; prune removes them after native sync.
-        $replicaRows = [];
-        if (!$payload['prune']) {
-            foreach ($replicas as $id => $row) {
-                if (!isset($desired[$id])) {
-                    $replicaRows[] = [
-                        '@attributes' => $row['@attributes'],
-                        'interface' => $id,
-                        'policy_id' => $row['policy_id'],
-                    ];
-                }
-            }
-        }
+        // Reconcile definitions before writing new assignment relations. This
+        // handles dynamically defined synchronized policies on a fresh peer.
+        $policyPlan = self::reconcilePolicies($next, $payload, $uuidFactory);
+        $finalPolicies = self::policies($next);
+
         foreach ($desired as $id => $row) {
-            $attributes = $replicas[$id]['@attributes'] ?? [];
+            $policy = $finalPolicies[$row['policy_id']] ?? null;
+            if ($policy === null || !$policy['synchronize']) {
+                self::fail('incoming interface has unknown or disabled HA policy ' . $row['policy_id']);
+            }
+            $attributes = $assignments[$id]['@attributes'] ?? [];
             if (empty($attributes['uuid'])) {
                 $uuid = trim((string)$uuidFactory());
                 if ($uuid === '') {
@@ -972,27 +988,24 @@ final class InterfaceSync
                 }
                 $attributes = ['uuid' => $uuid];
             }
-            $replicaRows[] = [
-                '@attributes' => $attributes,
-                'interface' => $id,
-                'policy_id' => $row['policy_id'],
+            $assignmentRows[] = [
+                '@attributes' => $attributes, 'interface' => $id,
+                'policy_id' => $policy['uuid'],
             ];
         }
-        self::setReplicaRows($next, $replicaRows);
-        $policyPlan = self::reconcilePolicies($next, $payload, $uuidFactory);
+        self::setAssignmentRows($next, $assignmentRows);
 
-        $adoptIdentifiers = array_values(array_unique(array_merge(array_keys($current), array_keys($desired))));
-        $adoptedNoSync = self::adoptNativeRecords($next, $adoptIdentifiers);
+        $adoptedNoSync = self::adoptNativeRecords(
+            $next,
+            array_values(array_unique(array_merge(array_keys($current), array_keys($desired))))
+        );
 
         $destroy = [];
         foreach ($currentDevices as $device => $id) {
             $idDesired = isset($desired[$id]);
             $deviceChanged = $idDesired && $desired[$id]['device'] !== $device;
-            if (
-                ($payload['prune'] && !$idDesired) ||
-                $deviceChanged ||
-                ($idDesired && !$deviceChanged && in_array($device, $configureVlan, true))
-            ) {
+            if (($payload['prune'] && !$idDesired) || $deviceChanged ||
+                ($idDesired && !$deviceChanged && in_array($device, $configureVlan, true))) {
                 $destroy[] = $device;
             }
         }
@@ -1011,7 +1024,6 @@ final class InterfaceSync
                 'configure_vlans' => $configureVlan,
                 'configure_interfaces' => $configureIf,
                 'adopted_nosync' => $adoptedNoSync,
-                'adopted_local_assignments' => array_keys($adoptedLocal),
                 'policies' => $policyPlan,
             ],
         ];

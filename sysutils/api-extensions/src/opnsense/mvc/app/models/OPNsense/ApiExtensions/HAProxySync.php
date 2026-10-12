@@ -963,41 +963,34 @@ final class HAProxySync
 
         $inventory = self::inventory($config);
         $currentObjects = $inventory['objects'];
-        $localAssignments = self::assignments($config);
-        $replicas = self::replicas($config);
+        $assignments = self::assignments($config);
+        $policies = InterfaceSync::policies($config);
 
         $desired = [];
         foreach ($payload['objects'] as $row) {
-            $desired[self::objectKey($row['object_type'], $row['object_name'])] = $row;
-        }
-
-        $adoptedLocal = [];
-        foreach ($desired as $key => $row) {
-            if (isset($replicas[$key])) {
-                continue;
-            }
-            if (isset($localAssignments[$key])) {
-                if ($localAssignments[$key]['policy_id'] !== $row['policy_id']) {
-                    self::fail(sprintf(
-                        'cannot adopt HAProxy %s %s: local policy %s differs from peer policy %s',
-                        $row['object_type'],
-                        $row['object_name'],
-                        $localAssignments[$key]['policy_id'],
-                        $row['policy_id']
-                    ));
-                }
-                $adoptedLocal[$key] = $localAssignments[$key];
+            $key = self::objectKey($row['object_type'], $row['object_name']);
+            $desired[$key] = $row;
+            if (isset($assignments[$key]) && $assignments[$key]['policy_id'] !== $row['policy_id']) {
+                self::fail(sprintf(
+                    'HAProxy %s policy conflict: target %s, source %s',
+                    $key,
+                    $assignments[$key]['policy_id'],
+                    $row['policy_id']
+                ));
             }
         }
 
-        $managed = $replicas + $adoptedLocal;
+        // Symmetric HA: a synchronized policy defines the mutable scope;
+        // objects are never permanently tagged as local owners or replicas.
+        $managed = [];
+        foreach ($assignments as $key => $assignment) {
+            if ($policies[$assignment['policy_id']]['synchronize']) {
+                $managed[$key] = $assignment;
+            }
+        }
         foreach ($desired as $key => $row) {
             if (isset($currentObjects[$key]) && !isset($managed[$key])) {
-                self::fail(sprintf(
-                    'policy-managed HAProxy %s %s is already owned locally',
-                    $row['object_type'],
-                    $row['object_name']
-                ));
+                self::fail(sprintf('HAProxy %s collides with a local-only object', $key));
             }
         }
 
@@ -1128,26 +1121,33 @@ final class HAProxySync
         }
         self::setHAProxyRows($next, 'backend', $backendRows);
 
-        if ($adoptedLocal !== []) {
-            $remainingAssignments = [];
-            foreach (self::assignmentRowsRaw($next) as $row) {
-                if (!is_array($row)) {
-                    continue;
-                }
-                $key = self::objectKey(
-                    self::objectType($row['object_type'] ?? ''),
-                    self::objectName($row['object_name'] ?? '')
-                );
-                if (!isset($adoptedLocal[$key])) {
-                    $remainingAssignments[] = $row;
-                }
+        // Preserve local-only assignments; prune no-longer-selected synchronized
+        // objects. The remaining assignments and policy references are the same
+        // on source and receiver, so the next peer can immediately send back.
+        $assignmentRows = [];
+        foreach (self::assignmentRowsRaw($config) as $row) {
+            $key = self::objectKey(
+                self::objectType($row['object_type'] ?? ''),
+                self::objectName($row['object_name'] ?? '')
+            );
+            if (!isset($managed[$key])) {
+                $assignmentRows[] = $row;
             }
-            self::setAssignmentRows($next, $remainingAssignments);
         }
+        self::setAssignmentRows($next, $assignmentRows);
 
-        $replicaRows = [];
+        $policyPlan = InterfaceSync::reconcilePolicies(
+            $next,
+            ['policies' => $payload['policies'], 'prune' => true],
+            $uuidFactory
+        );
+        $finalPolicies = InterfaceSync::policies($next);
         foreach ($desired as $key => $row) {
-            $attributes = $replicas[$key]['@attributes'] ?? [];
+            $policy = $finalPolicies[$row['policy_id']] ?? null;
+            if ($policy === null || !$policy['synchronize']) {
+                self::fail('incoming HAProxy object has unknown or disabled policy ' . $row['policy_id']);
+            }
+            $attributes = $assignments[$key]['@attributes'] ?? [];
             if (empty($attributes['uuid'])) {
                 $uuid = trim((string)$uuidFactory());
                 if ($uuid === '') {
@@ -1155,27 +1155,20 @@ final class HAProxySync
                 }
                 $attributes = ['uuid' => $uuid];
             }
-            $replicaRows[] = [
+            $assignmentRows[] = [
                 '@attributes' => $attributes,
                 'object_type' => $row['object_type'],
                 'object_name' => $row['object_name'],
-                'policy_id' => $row['policy_id'],
+                'policy_id' => $policy['uuid'],
             ];
         }
-        self::setReplicaRows($next, $replicaRows);
-
-        $policyPlan = InterfaceSync::reconcilePolicies(
-            $next,
-            ['policies' => $payload['policies'], 'prune' => true],
-            $uuidFactory
-        );
+        self::setAssignmentRows($next, $assignmentRows);
 
         return [
             'config' => $next,
             'changed' => $next !== $config,
             'count' => count($desired),
             'plan' => [
-                'adopted_local_assignments' => array_keys($adoptedLocal),
                 'policies' => $policyPlan,
             ],
         ];
