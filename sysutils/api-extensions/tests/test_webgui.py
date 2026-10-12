@@ -153,7 +153,7 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             self.assertIn(f"PolicyAssignmentManager::setHAProxy('{object_type}'", controller)
             self.assertIn(f"PolicyAssignmentManager::removeHAProxy('{object_type}'", controller)
             self.assertIn(f"PolicyAssignmentManager::renameHAProxy('{object_type}'", controller)
-        self.assertIn("HA peer replica and is read-only", controller)
+        self.assertNotIn("HA peer replica and is read-only", controller)
 
     def test_native_haproxy_template_supports_proxy_v2_health_checks(self):
         template = (
@@ -165,7 +165,7 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertIn('backend.healthCheckProxyProto|default("") == "backend"', template)
         self.assertIn("server_options.append('check-send-proxy')", template)
 
-    def test_policy_assignment_manager_preserves_native_object_ownership(self):
+    def test_policy_assignment_manager_uses_native_objects_without_replica_ownership(self):
         helper = (MVC / "models/OPNsense/ApiExtensions/PolicyAssignmentManager.php").read_text()
         for marker in (
             "function setInterface",
@@ -177,7 +177,7 @@ class CarpHealthWebGuiTests(unittest.TestCase):
             "function haproxyState",
         ):
             self.assertIn(marker, helper)
-        self.assertIn("HA peer replica", helper)
+        self.assertNotIn("HA peer replica", helper)
         self.assertIn("HASyncPolicy", helper)
 
         haproxy_controller = (MVC / "controllers/OPNsense/ApiExtensions/Api/HaproxyPolicyController.php").read_text()
