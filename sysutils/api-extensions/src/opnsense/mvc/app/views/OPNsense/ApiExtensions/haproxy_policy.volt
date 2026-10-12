@@ -104,9 +104,9 @@ $(document).ready(function() {
 
     function policyFormatter(column, row) {
         const policyId = effectivePolicy(row);
-        if (row.owner === 'ha_peer' || row.owner === 'stale') {
+        if (row.stale) {
             const policy = policyById(policyId);
-            return $('<span>').addClass(row.owner === 'stale' ? 'text-danger' : 'text-muted').text(policy ? policy.id : '{{ lang._("Unassigned") }}')[0];
+            return $('<span>').addClass('text-danger').text(policy ? policy.id : '{{ lang._("Unassigned") }}')[0];
         }
         const select = $('<select>')
             .addClass('form-control input-sm haproxy-policy-row-policy')
@@ -124,21 +124,8 @@ $(document).ready(function() {
         return behaviorElement(effectivePolicy(row));
     }
 
-    function ownerFormatter(column, row) {
-        if (row.owner === 'ha_peer') {
-            return $('<span>').addClass('text-muted').text('{{ lang._("HA peer") }}')[0];
-        }
-        if (row.owner === 'stale') {
-            return $('<span>').addClass('label label-danger').text('{{ lang._("Stale assignment") }}')[0];
-        }
-        if (row.owner === 'unassigned') {
-            return $('<span>').addClass('label label-warning').text('{{ lang._("Unassigned") }}')[0];
-        }
-        return '{{ lang._("Local") }}';
-    }
-
     function commandsFormatter(column, row) {
-        if (row.owner !== 'stale' || !row.assignment_uuid) {
+        if (!row.stale || !row.assignment_uuid) {
             return '';
         }
         return $('<button>')
@@ -193,13 +180,12 @@ $(document).ready(function() {
                     type: typeFormatter,
                     policy: policyFormatter,
                     sync: syncFormatter,
-                    owner: ownerFormatter,
                     commands: commandsFormatter
                 }
             },
             tabulatorOptions: {
                 selectableRowsCheck: function(row) {
-                    return row.getData().owner === 'local' || row.getData().owner === 'unassigned';
+                    return !row.getData().stale;
                 },
                 rowFormatter: function(row) {
                     const element = $(row.getElement());
@@ -207,9 +193,6 @@ $(document).ready(function() {
                         'haproxy-policy-pending-row',
                         Object.prototype.hasOwnProperty.call(pendingAssignments, row.getData().object_key)
                     );
-                    if (row.getData().owner === 'ha_peer') {
-                        element.addClass('haproxy-policy-peer-row');
-                    }
                 }
             }
         });
@@ -457,7 +440,6 @@ $(document).ready(function() {
             <th data-column-id="details" data-type="string">{{ lang._('Target / Relations') }}</th>
             <th data-column-id="policy_id" data-type="string" data-formatter="policy" data-width="150">{{ lang._('HA Policy') }}</th>
             <th data-column-id="synchronize" data-type="string" data-formatter="sync" data-width="120">{{ lang._('Sync') }}</th>
-            <th data-column-id="owner" data-type="string" data-formatter="owner" data-width="120">{{ lang._('Managed By') }}</th>
             <th data-column-id="commands" data-formatter="commands" data-sortable="false" data-width="80">{{ lang._('Commands') }}</th>
         </tr></thead>
         <tbody></tbody>

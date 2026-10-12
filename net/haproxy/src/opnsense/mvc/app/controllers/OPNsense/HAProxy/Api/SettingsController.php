@@ -104,7 +104,6 @@ class SettingsController extends ApiMutableModelControllerBase
                 'policy_id' => '',
                 'policy_description' => '',
                 'synchronize' => false,
-                'owner' => 'unassigned',
                 'ha_service_enabled' => false,
             ];
         }
@@ -131,7 +130,6 @@ class SettingsController extends ApiMutableModelControllerBase
             }
         }
         $result[$root]['ha_policy'] = $options;
-        $result[$root]['ha_owner'] = $state['owner'];
         $result[$root]['ha_synchronize'] = $state['synchronize'] ? '1' : '0';
         return $result;
     }
@@ -144,28 +142,10 @@ class SettingsController extends ApiMutableModelControllerBase
         foreach ($result['rows'] as &$row) {
             $state = $this->policyState($type, trim((string)($row['name'] ?? '')));
             $row['ha_policy'] = $state['policy_id'];
-            $row['ha_owner'] = $state['owner'];
             $row['ha_synchronize'] = $state['synchronize'] ? '1' : '0';
         }
         unset($row);
         return $result;
-    }
-
-    private function readonlyReplica(string $type, string $name, string $root): ?array
-    {
-        if (!$this->hasPolicyManager() || $name === '') {
-            return null;
-        }
-        $state = $this->policyState($type, $name);
-        if ($state['owner'] !== 'ha_peer') {
-            return null;
-        }
-        return [
-            'result' => 'failed',
-            'validations' => [
-                $root . '.ha_policy' => gettext('This object is an HA peer replica and is read-only on this node.')
-            ]
-        ];
     }
 
     public function getFrontendAction($uuid = null)
@@ -206,9 +186,6 @@ class SettingsController extends ApiMutableModelControllerBase
     public function setBackendAction($uuid)
     {
         $oldName = $this->objectName('backend', $uuid);
-        if (($readonly = $this->readonlyReplica('backend', $oldName, 'backend')) !== null) {
-            return $readonly;
-        }
         if (($validation = $this->validatePolicyPayload('backend')) !== null) {
             return $validation;
         }
@@ -257,9 +234,6 @@ class SettingsController extends ApiMutableModelControllerBase
         $names = [];
         foreach (explode(',', (string)$uuid) as $itemUuid) {
             $name = $this->objectName('backend', trim($itemUuid));
-            if (($readonly = $this->readonlyReplica('backend', $name, 'backend')) !== null) {
-                return $readonly;
-            }
             if ($name !== '') {
                 $names[] = $name;
             }
@@ -275,10 +249,6 @@ class SettingsController extends ApiMutableModelControllerBase
 
     public function toggleBackendAction($uuid, $enabled = null)
     {
-        $name = $this->objectName('backend', $uuid);
-        if (($readonly = $this->readonlyReplica('backend', $name, 'backend')) !== null) {
-            return $readonly;
-        }
         return $this->toggleBase('backends.backend', $uuid);
     }
 
@@ -298,9 +268,6 @@ class SettingsController extends ApiMutableModelControllerBase
     public function setServerAction($uuid)
     {
         $oldName = $this->objectName('server', $uuid);
-        if (($readonly = $this->readonlyReplica('server', $oldName, 'server')) !== null) {
-            return $readonly;
-        }
         if (($validation = $this->validatePolicyPayload('server')) !== null) {
             return $validation;
         }
@@ -349,9 +316,6 @@ class SettingsController extends ApiMutableModelControllerBase
         $names = [];
         foreach (explode(',', (string)$uuid) as $itemUuid) {
             $name = $this->objectName('server', trim($itemUuid));
-            if (($readonly = $this->readonlyReplica('server', $name, 'server')) !== null) {
-                return $readonly;
-            }
             if ($name !== '') {
                 $names[] = $name;
             }
@@ -367,10 +331,6 @@ class SettingsController extends ApiMutableModelControllerBase
 
     public function toggleServerAction($uuid, $enabled = null)
     {
-        $name = $this->objectName('server', $uuid);
-        if (($readonly = $this->readonlyReplica('server', $name, 'server')) !== null) {
-            return $readonly;
-        }
         return $this->toggleBase('servers.server', $uuid);
     }
 
@@ -390,9 +350,6 @@ class SettingsController extends ApiMutableModelControllerBase
     public function setHealthcheckAction($uuid)
     {
         $oldName = $this->objectName('healthcheck', $uuid);
-        if (($readonly = $this->readonlyReplica('healthcheck', $oldName, 'healthcheck')) !== null) {
-            return $readonly;
-        }
         if (($validation = $this->validatePolicyPayload('healthcheck')) !== null) {
             return $validation;
         }
@@ -441,9 +398,6 @@ class SettingsController extends ApiMutableModelControllerBase
         $names = [];
         foreach (explode(',', (string)$uuid) as $itemUuid) {
             $name = $this->objectName('healthcheck', trim($itemUuid));
-            if (($readonly = $this->readonlyReplica('healthcheck', $name, 'healthcheck')) !== null) {
-                return $readonly;
-            }
             if ($name !== '') {
                 $names[] = $name;
             }

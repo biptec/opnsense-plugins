@@ -168,28 +168,6 @@ final class InterfaceSync
         return $out;
     }
 
-    public static function replicas(array $config): array
-    {
-        $root = self::modelRoot($config);
-        $out = [];
-        foreach (self::containerRows($root['replicas'] ?? [], 'replica', 'interface sync replicas container') as $row) {
-            if (!is_array($row)) {
-                self::fail('invalid HA replica ownership record');
-            }
-            $identifier = self::interfaceId($row['interface'] ?? '');
-            $policyId = self::policyId($row['policy_id'] ?? '');
-            if (isset($out[$identifier])) {
-                self::fail('duplicate HA replica ownership record ' . $identifier);
-            }
-            $out[$identifier] = [
-                'interface' => $identifier,
-                'policy_id' => $policyId,
-                '@attributes' => is_array($row['@attributes'] ?? null) ? $row['@attributes'] : [],
-            ];
-        }
-        return $out;
-    }
-
     public static function validateCoverage(array $config, array $identifiers): void
     {
         $assignments = self::assignments($config);
@@ -325,49 +303,6 @@ final class InterfaceSync
                 self::fail(sprintf('policy assignment references missing interface %s', $id));
             }
             $out[] = self::sourceInterface($id, $assignment['policy_id'], $interfaces[$id], $vlans);
-        }
-        usort($out, fn($a, $b) => strcmp($a['identifier'], $b['identifier']));
-        $payloadPolicies = [];
-        foreach ($policies as $policy) {
-            $payloadPolicies[] = [
-                'id' => $policy['id'],
-                'description' => $policy['description'],
-                'synchronize' => $policy['synchronize'],
-            ];
-        }
-        return [
-            'version' => self::VERSION,
-            'policies' => $payloadPolicies,
-            'interfaces' => $out,
-            'prune' => $prune,
-        ];
-    }
-
-    public static function buildReplicaPayload(array $config, string $policyId, bool $prune = true): array
-    {
-        if (!self::isEnabled($config)) {
-            self::fail('Policy-managed Interfaces / VLANs is not enabled in High Availability synchronization');
-        }
-        $policyId = self::policyId($policyId);
-        $interfaces = $config['interfaces'] ?? [];
-        if (!is_array($interfaces)) {
-            self::fail('interfaces must be an array');
-        }
-        $vlans = self::vlanMap($config);
-        $policies = self::policies($config);
-        if (!isset($policies[$policyId]) || !$policies[$policyId]['synchronize']) {
-            self::fail('replacement handoff policy must exist and be synchronized: ' . $policyId);
-        }
-        $replicas = self::replicas($config);
-        $out = [];
-        foreach ($replicas as $id => $replica) {
-            if ($replica['policy_id'] !== $policyId) {
-                continue;
-            }
-            if (!isset($interfaces[$id]) || !is_array($interfaces[$id])) {
-                self::fail(sprintf('replica ownership references missing interface %s', $id));
-            }
-            $out[] = self::sourceInterface($id, $replica['policy_id'], $interfaces[$id], $vlans);
         }
         usort($out, fn($a, $b) => strcmp($a['identifier'], $b['identifier']));
         $payloadPolicies = [];
@@ -589,12 +524,6 @@ final class InterfaceSync
         $root['assignments'] = self::serializeRows('assignment', $rows);
     }
 
-    private static function setReplicaRows(array &$config, array $rows): void
-    {
-        $root =& self::modelRootForWrite($config);
-        $root['replicas'] = self::serializeRows('replica', $rows);
-    }
-
     public static function reconcilePolicies(array &$config, array $payload, callable $uuidFactory): array
     {
         $current = [];
@@ -626,9 +555,6 @@ final class InterfaceSync
             foreach (self::assignments($config) as $row) {
                 $references[$row['policy_id']] = true;
             }
-            foreach (self::replicas($config) as $row) {
-                $references[$row['policy_id']] = true;
-            }
 
             // The policy model is shared by interface and HAProxy object assignments. A policy
             // may be local-only on the receiver yet still be referenced by a local HAProxy
@@ -645,7 +571,6 @@ final class InterfaceSync
             $root = self::modelRoot($config);
             foreach ([
                 ['haproxy_assignments', 'assignment'],
-                ['haproxy_replicas', 'replica'],
             ] as [$container, $item]) {
                 foreach (self::containerRows(
                     $root[$container] ?? [],
@@ -667,7 +592,7 @@ final class InterfaceSync
             }
             foreach ($current as $id => $row) {
                 if (!isset($desired[$id]) && isset($references[$id])) {
-                    self::fail(sprintf('cannot prune interface policy %s while it is still assigned locally or to an HA replica', $id));
+                    self::fail(sprintf('cannot prune interface policy %s while it is still assigned to a local HA policy object', $id));
                 }
             }
         }
@@ -707,100 +632,6 @@ final class InterfaceSync
             'desired' => count($desired),
             'retained_local' => count($keep) - count($desired),
         ];
-    }
-
-    public static function reconcileAsOwner(
-        array $config,
-        $payload,
-        array $identityByInterface,
-        ?callable $uuidFactory = null
-    ): array {
-        $payload = self::validatePayload($payload);
-        $desired = [];
-        foreach ($payload['interfaces'] as $row) {
-            $desired[$row['identifier']] = $row;
-        }
-        if (array_diff(array_keys($desired), array_keys($identityByInterface)) ||
-            array_diff(array_keys($identityByInterface), array_keys($desired))) {
-            self::fail('replacement interface identity manifest must match the replica payload exactly');
-        }
-
-        $assignments = self::assignments($config);
-        $replicas = self::replicas($config);
-        foreach ($desired as $id => $_) {
-            if (isset($assignments[$id]) || isset($replicas[$id])) {
-                self::fail('replacement ownership handoff target already owns or replicates interface ' . $id);
-            }
-            $identity = $identityByInterface[$id];
-            if (!is_array($identity)) {
-                self::fail('invalid replacement interface identity record for ' . $id);
-            }
-            foreach (['vlan_uuid', 'assignment_uuid'] as $field) {
-                $value = trim((string)($identity[$field] ?? ''));
-                if (!preg_match('/^[0-9A-Fa-f-]{16,64}$/D', $value)) {
-                    self::fail(sprintf('invalid replacement %s for interface %s', $field, $id));
-                }
-            }
-        }
-
-        $result = self::reconcile($config, $payload, $uuidFactory);
-        $next = $result['config'];
-        $deviceToId = [];
-        foreach ($desired as $id => $row) {
-            $deviceToId[$row['device']] = $id;
-        }
-        $vlans = self::vlanList($next);
-        $seenVlans = [];
-        foreach ($vlans as &$vlan) {
-            $device = trim((string)($vlan['vlanif'] ?? ''));
-            if (!isset($deviceToId[$device])) {
-                continue;
-            }
-            $id = $deviceToId[$device];
-            $vlan['@attributes'] = ['uuid' => trim((string)$identityByInterface[$id]['vlan_uuid'])];
-            $seenVlans[$id] = true;
-        }
-        unset($vlan);
-        foreach ($desired as $id => $_) {
-            if (!isset($seenVlans[$id])) {
-                self::fail('replacement ownership handoff could not resolve VLAN for interface ' . $id);
-            }
-        }
-        $next['vlans']['vlan'] = array_values($vlans);
-
-        $policies = self::policies($next);
-        $assignmentRows = self::assignmentRowsRaw($next);
-        foreach ($desired as $id => $row) {
-            $policyId = $row['policy_id'];
-            if (!isset($policies[$policyId]) || !$policies[$policyId]['synchronize']) {
-                self::fail('replacement ownership handoff target is missing synchronized policy ' . $policyId);
-            }
-            $assignmentRows[] = [
-                '@attributes' => ['uuid' => trim((string)$identityByInterface[$id]['assignment_uuid'])],
-                'interface' => $id,
-                'policy_id' => $policies[$policyId]['uuid'],
-            ];
-        }
-        self::setAssignmentRows($next, $assignmentRows);
-
-        $replicaRows = [];
-        foreach (self::replicas($next) as $id => $row) {
-            if (isset($desired[$id])) {
-                continue;
-            }
-            $replicaRows[] = [
-                '@attributes' => $row['@attributes'],
-                'interface' => $id,
-                'policy_id' => $row['policy_id'],
-            ];
-        }
-        self::setReplicaRows($next, $replicaRows);
-
-        $result['config'] = $next;
-        $result['changed'] = $next !== $config;
-        $result['plan']['promoted_owner_interfaces'] = array_keys($desired);
-        sort($result['plan']['promoted_owner_interfaces']);
-        return $result;
     }
 
     /**
