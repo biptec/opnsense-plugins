@@ -1,0 +1,139 @@
+{
+  "fixture_type": "synthetic-old-etna-native-ha-payload",
+  "haproxy": {
+    "objects": [
+      {
+        "data": {
+          "checkport": "",
+          "description": "Customer TCP health monitor",
+          "force_ssl": "0",
+          "http_host": "",
+          "http_method": "",
+          "http_uri": "",
+          "interval": "2000",
+          "name": "hc-customer-example",
+          "ssl": "nopref",
+          "sslSNI": "",
+          "tcp_matchType": "",
+          "tcp_matchValue": "",
+          "tcp_sendValue": "",
+          "type": "tcp"
+        },
+        "linked_healthcheck_name": "",
+        "linked_server_names": [],
+        "object_name": "hc-customer-example",
+        "object_type": "healthcheck",
+        "policy_id": "endpoint"
+      },
+      {
+        "data": {
+          "address": "192.0.2.44",
+          "advanced": "",
+          "checkDownInterval": "",
+          "checkInterval": "",
+          "checkport": "",
+          "description": "Customer origin",
+          "enabled": "1",
+          "linkedResolver": "",
+          "maxConnections": "",
+          "mode": "active",
+          "name": "origin-customer-example",
+          "port": "443",
+          "ssl": "0",
+          "sslCA": "",
+          "sslCRL": "",
+          "sslClientCertificate": "",
+          "type": "static",
+          "unix_socket": "",
+          "weight": ""
+        },
+        "linked_healthcheck_name": "",
+        "linked_server_names": [],
+        "object_name": "origin-customer-example",
+        "object_type": "server",
+        "policy_id": "endpoint"
+      },
+      {
+        "data": {
+          "algorithm": "roundrobin",
+          "basicAuthGroups": "",
+          "basicAuthUsers": "",
+          "checkDownInterval": "",
+          "checkInterval": "2000",
+          "customOptions": "",
+          "description": "Customer SNI backend",
+          "enabled": "1",
+          "healthCheckEnabled": "1",
+          "healthCheckFall": "",
+          "healthCheckProxyProto": "backend",
+          "healthCheckRise": "",
+          "linkedActions": "",
+          "linkedErrorfiles": "",
+          "linkedFcgi": "",
+          "linkedMailer": "",
+          "linkedResolver": "",
+          "mode": "tcp",
+          "name": "sni-customer.example",
+          "proxyProtocol": "v2"
+        },
+        "linked_healthcheck_name": "hc-customer-example",
+        "linked_server_names": [
+          "origin-customer-example"
+        ],
+        "object_name": "sni-customer.example",
+        "object_type": "backend",
+        "policy_id": "endpoint"
+      }
+    ],
+    "policies": [
+      {
+        "description": "Router core",
+        "id": "core",
+        "synchronize": false
+      },
+      {
+        "description": "Node services",
+        "id": "services",
+        "synchronize": false
+      },
+      {
+        "description": "HA shared endpoint networks",
+        "id": "endpoint",
+        "synchronize": true
+      }
+    ],
+    "version": 2
+  },
+  "interface": {
+    "interfaces": [
+      {
+        "description": "Issue #103 shared-test Ubuntu endpoint state continuity",
+        "device": "vlan3990",
+        "identifier": "ep_ha_issue_00474f9e",
+        "policy_id": "endpoint",
+        "tag": 3990
+      }
+    ],
+    "policies": [
+      {
+        "description": "Router core",
+        "id": "core",
+        "synchronize": false
+      },
+      {
+        "description": "Node services",
+        "id": "services",
+        "synchronize": false
+      },
+      {
+        "description": "HA shared endpoint networks",
+        "id": "endpoint",
+        "synchronize": true
+      }
+    ],
+    "prune": true,
+    "version": 2
+  },
+  "producer": "exact old InterfaceSync and HAProxySync PHP classes",
+  "source_plugin_commit": "7dc9649eef6f86d837fa47fb1edaef6d5a790b36"
+}

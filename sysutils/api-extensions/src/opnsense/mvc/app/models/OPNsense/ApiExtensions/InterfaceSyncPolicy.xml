@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/ApiExtensions/InterfaceSyncPolicy</mount>
     <description>HA synchronization policies and object assignments</description>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
     <items>
         <sync_marker>
             <enabled type="BooleanField">
@@ -62,18 +62,6 @@
                 </policy_id>
             </assignment>
         </assignments>
-        <replicas>
-            <replica type="ArrayField">
-                <interface type="TextField">
-                    <Required>Y</Required>
-                    <Mask>/^[A-Za-z0-9_.:-]{1,64}$/</Mask>
-                </interface>
-                <policy_id type="TextField">
-                    <Required>Y</Required>
-                    <Mask>/^[a-z][a-z0-9_-]{0,31}$/</Mask>
-                </policy_id>
-            </replica>
-        </replicas>
         <haproxy_assignments>
             <assignment type="ArrayField">
                 <object_type type="OptionField">
@@ -101,24 +89,5 @@
                 </policy_id>
             </assignment>
         </haproxy_assignments>
-        <haproxy_replicas>
-            <replica type="ArrayField">
-                <object_type type="OptionField">
-                    <Required>Y</Required>
-                    <OptionValues>
-                        <server>Server</server>
-                        <backend>Backend</backend>
-                    </OptionValues>
-                </object_type>
-                <object_name type="TextField">
-                    <Required>Y</Required>
-                    <Mask>/^([0-9a-zA-Z._\-]){1,255}$/u</Mask>
-                </object_name>
-                <policy_id type="TextField">
-                    <Required>Y</Required>
-                    <Mask>/^[a-z][a-z0-9_-]{0,31}$/</Mask>
-                </policy_id>
-            </replica>
-        </haproxy_replicas>
     </items>
 </model>

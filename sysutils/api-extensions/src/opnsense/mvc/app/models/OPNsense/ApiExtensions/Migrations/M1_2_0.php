@@ -11,7 +11,12 @@ class M1_2_0 extends BaseModelMigration
         // Before model 1.1.0, checks had no scope and therefore meant global demotion.
         // The 1.2.0 schema defaults new checks to automatic interface discovery, so
         // preserve legacy meaning during the one-time migration.
-        foreach ($model->getNodeByReference('checks.check')->iterateItems() as $check) {
+        $checks = $model->getNodeByReference('checks.check');
+        if ($checks === null) {
+            // Fresh Golden/NoCloud configs have no existing checks to migrate.
+            return;
+        }
+        foreach ($checks->iterateItems() as $check) {
             if ((string)$check->scope === 'interface') {
                 $check->scope = 'global';
             }

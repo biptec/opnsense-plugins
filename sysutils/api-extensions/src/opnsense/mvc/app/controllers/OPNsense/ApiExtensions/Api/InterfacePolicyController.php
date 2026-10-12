@@ -44,19 +44,9 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
                         return ['result' => 'failed', 'message' => 'Policy is assigned to a local interface and cannot be deleted.'];
                     }
                 }
-                foreach (InterfaceSync::replicas($config) as $replica) {
-                    if (($replica['policy_id'] ?? '') === $policyId) {
-                        return ['result' => 'failed', 'message' => 'Policy is used by an HA peer interface replica and cannot be deleted.'];
-                    }
-                }
                 foreach (HAProxySync::assignments($config) as $assignment) {
                     if (($assignment['policy_id'] ?? '') === $policyId) {
                         return ['result' => 'failed', 'message' => 'Policy is assigned to a local HAProxy object and cannot be deleted.'];
-                    }
-                }
-                foreach (HAProxySync::replicas($config) as $replica) {
-                    if (($replica['policy_id'] ?? '') === $policyId) {
-                        return ['result' => 'failed', 'message' => 'Policy is used by an HA peer HAProxy replica and cannot be deleted.'];
                     }
                 }
             }
@@ -167,7 +157,6 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
         Config::getInstance()->lock();
         $config = Config::getInstance()->toArray();
         $policies = InterfaceSync::policies($config);
-        $replicas = InterfaceSync::replicas($config);
         if (!isset($policies[$policyId])) {
             return ['result' => 'failed', 'message' => 'The selected interface policy does not exist.'];
         }
@@ -175,9 +164,6 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
         foreach ($interfaces as $interface) {
             if (!isset($config['interfaces'][$interface]) || !is_array($config['interfaces'][$interface])) {
                 return ['result' => 'failed', 'message' => sprintf('Interface %s does not exist.', $interface)];
-            }
-            if (isset($replicas[$interface])) {
-                return ['result' => 'failed', 'message' => sprintf('HA peer replica %s is read-only on this node.', $interface)];
             }
         }
 
@@ -239,7 +225,6 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
         Config::getInstance()->lock();
         $config = Config::getInstance()->toArray();
         $policies = InterfaceSync::policies($config);
-        $replicas = InterfaceSync::replicas($config);
         $normalized = [];
         foreach ($requested as $interface => $policyId) {
             $interface = trim((string)$interface);
@@ -249,9 +234,6 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
             }
             if (!isset($config['interfaces'][$interface]) || !is_array($config['interfaces'][$interface])) {
                 return ['result' => 'failed', 'message' => sprintf('Interface %s does not exist.', $interface)];
-            }
-            if (isset($replicas[$interface])) {
-                return ['result' => 'failed', 'message' => sprintf('HA peer replica %s is read-only on this node.', $interface)];
             }
             if (!isset($policies[$policyId])) {
                 return ['result' => 'failed', 'message' => sprintf('Policy %s does not exist.', $policyId)];
@@ -290,7 +272,6 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
         $config = Config::getInstance()->toArray();
         $policies = InterfaceSync::policies($config);
         $assignments = InterfaceSync::assignments($config);
-        $replicas = InterfaceSync::replicas($config);
         $vlans = [];
         foreach (($config['vlans']['vlan'] ?? []) ?: [] as $vlan) {
             if (is_array($vlan) && trim((string)($vlan['vlanif'] ?? '')) !== '') {
@@ -304,15 +285,7 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
                 continue;
             }
             $device = trim((string)($ifc['if'] ?? ''));
-            $policyId = '';
-            $owner = 'unassigned';
-            if (isset($replicas[$identifier])) {
-                $policyId = $replicas[$identifier]['policy_id'];
-                $owner = 'ha_peer';
-            } elseif (isset($assignments[$identifier])) {
-                $policyId = $assignments[$identifier]['policy_id'];
-                $owner = 'local';
-            }
+            $policyId = $assignments[$identifier]['policy_id'] ?? '';
             $policy = $policies[$policyId] ?? null;
             $rows[] = [
                 'uuid' => (string)$identifier,
@@ -323,7 +296,6 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
                 'policy_id' => $policyId,
                 'policy_description' => is_array($policy) ? $policy['description'] : '',
                 'synchronize' => is_array($policy) ? $policy['synchronize'] : false,
-                'owner' => $owner,
             ];
         }
         usort($rows, fn($a, $b) => strcmp($a['interface'], $b['interface']));
@@ -347,7 +319,7 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
             }
             return $this->searchRecordsetBase(
                 $this->overviewState()['rows'],
-                ['interface', 'description', 'device', 'vlan', 'policy_id', 'policy_description', 'owner'],
+                ['interface', 'description', 'device', 'vlan', 'policy_id', 'policy_description'],
                 'interface',
                 $filter
             );
@@ -368,7 +340,7 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
                 'status' => 'ok',
                 'ha_service_enabled' => InterfaceSync::isEnabled($state['config']),
                 'policies' => array_values($state['policies']),
-                'unassigned' => count(array_filter($state['rows'], fn($row) => $row['owner'] === 'unassigned')),
+                'unassigned' => count(array_filter($state['rows'], fn($row) => trim((string)$row['policy_id']) === '')),
             ];
         } catch (\Throwable $error) {
             return ['status' => 'failed', 'message' => $error->getMessage()];

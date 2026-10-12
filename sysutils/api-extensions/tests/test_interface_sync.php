@@ -126,23 +126,24 @@ $disabled = $source;
 $disabled['hasync']['syncitems'] = 'virtualip,rules,staticroutes';
 bad(fn()=>InterfaceSync::buildPayload($disabled), 'standard HA service checkbox is authoritative');
 
-$serializedEmptyReceiver = base();
-$serializedEmptyReceiver['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['replicas'] = '';
-eq([], InterfaceSync::replicas($serializedEmptyReceiver), 'empty MVC replica container serializes as empty string');
-$serializedEmptyCreate = InterfaceSync::reconcile($serializedEmptyReceiver, $payload, fn()=>'receiver-empty-container-uuid');
-eq('endpoint', InterfaceSync::replicas($serializedEmptyCreate['config'])['customer_net']['policy_id'], 'empty serialized replica container accepts first HA replica');
-
-$singletonReplicaReceiver = $serializedEmptyCreate['config'];
-eq('customer_net', $singletonReplicaReceiver['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['replicas']['replica']['interface'], 'single replica is serialized in canonical OPNsense singleton form');
-eq('endpoint', InterfaceSync::replicas($singletonReplicaReceiver)['customer_net']['policy_id'], 'singleton MVC replica record is normalized');
+// A new receiver writes the incoming policy directly into the same assignments
+// collection that Terraform uses. There is no replica marker on either peer.
+$receiverWithEmptyAssignments = base();
+$receiverWithEmptyAssignments['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['assignments'] = '';
+$createdWithEmptyAssignments = InterfaceSync::reconcile(
+    $receiverWithEmptyAssignments, $payload, fn()=>'receiver-empty-container-uuid'
+);
+eq('endpoint', InterfaceSync::assignments($createdWithEmptyAssignments['config'])['customer_net']['policy_id'], 'first synchronized assignment is a normal assignment');
+eq('customer_net', $createdWithEmptyAssignments['config']['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['assignments']['assignment']['interface'], 'singleton assignment serialization matches MVC model');
 
 $r = InterfaceSync::reconcile(base(), $payload, fn()=>'receiver-uuid');
 eq(true, $r['changed'], 'create changed');
 eq(['vlan777'], $r['plan']['configure_vlans'], 'create vlan plan');
 eq(['customer_net'], $r['plan']['configure_interfaces'], 'create interface plan');
 eq('vlan777', $r['config']['interfaces']['customer_net']['if'], 'generic identifier created');
-eq('endpoint', InterfaceSync::replicas($r['config'])['customer_net']['policy_id'], 'receiver ownership recorded explicitly');
-eq(false, isset(InterfaceSync::assignments($r['config'])['customer_net']), 'replica is not a local assignment');
+eq('endpoint', InterfaceSync::assignments($r['config'])['customer_net']['policy_id'], 'receiver uses a standard policy assignment');
+eq('a-', substr(InterfaceSync::assignments($source)['customer_net']['@attributes']['uuid'], 0, 2), 'old source assignment is valid');
+eq(InterfaceSync::validatePayload($payload), InterfaceSync::validatePayload(InterfaceSync::buildPayload($r['config'])), 'new peer can immediately send the same policy-selected payload in reverse');
 $policyRowsAfterCreate = $r['config']['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['shared']['policies']['policy'];
 $endpointPolicyRows = array_values(array_filter($policyRowsAfterCreate, fn($row)=>($row['id'] ?? '') === 'endpoint'));
 eq('p-endpoint', $endpointPolicyRows[0]['@attributes']['uuid'], 'peer preserves existing policy UUID while reconciling by stable policy id');
@@ -165,13 +166,12 @@ $legacy['filter']['rule'] = [
     ['interface'=>'customer_net','nosync'=>'1','descr'=>'legacy rule'],
     ['interface'=>'core_wan','nosync'=>'1','descr'=>'core rule'],
 ];
-$adopted = InterfaceSync::reconcile($legacy, $payload, fn()=>'adopt-replica');
-eq(['customer_net'], $adopted['plan']['adopted_local_assignments'], 'matching explicit local policy adopts legacy object');
-eq(['virtualip'=>1,'gateways'=>1,'rules'=>1], $adopted['plan']['adopted_nosync'], 'only managed native records adopted');
+$adopted = InterfaceSync::reconcile($legacy, $payload, fn()=>'unused-uuid');
+eq(['virtualip'=>1,'gateways'=>1,'rules'=>1], $adopted['plan']['adopted_nosync'], 'only synchronized native records adopted');
 eq(false, isset($adopted['config']['virtualip']['vip'][0]['nosync']), 'managed vip nosync cleared');
 eq('1', $adopted['config']['virtualip']['vip'][1]['nosync'], 'core vip nosync preserved');
-eq(false, isset(InterfaceSync::assignments($adopted['config'])['customer_net']), 'adopted assignment removed from local ownership');
-eq('endpoint', InterfaceSync::replicas($adopted['config'])['customer_net']['policy_id'], 'adopted object becomes replica');
+eq('endpoint', InterfaceSync::assignments($adopted['config'])['customer_net']['policy_id'], 'existing matching policy assignment remains');
+eq('a-customer_net', InterfaceSync::assignments($adopted['config'])['customer_net']['@attributes']['uuid'], 'receiver keeps local assignment UUID');
 
 $mismatch = $source;
 foreach ($mismatch['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['assignments']['assignment'] as &$row) {
@@ -195,16 +195,17 @@ $emptyPrepare = $payload;
 $emptyPrepare['interfaces'] = [];
 $emptyPrepare['prune'] = false;
 $held = InterfaceSync::reconcile($r['config'], $emptyPrepare, fn()=>'unused');
-eq(false, $held['changed'], 'prepare preserves stale replica');
-eq(true, isset($held['config']['interfaces']['customer_net']), 'prepare keeps stale replica');
+eq(false, $held['changed'], 'prepare preserves pending stale synchronized interface');
+eq(true, isset($held['config']['interfaces']['customer_net']), 'prepare keeps old endpoint interface');
 
 $emptyPrune = $emptyPrepare;
 $emptyPrune['prune'] = true;
 $gone = InterfaceSync::reconcile($r['config'], $emptyPrune, fn()=>'unused');
-eq(['customer_net'], $gone['plan']['reset_interfaces'], 'prune resets stale replica');
-eq(['vlan777'], $gone['plan']['destroy_vlans'], 'prune destroys stale vlan');
-eq(false, isset($gone['config']['interfaces']['customer_net']), 'prune removes only peer-owned replica');
-eq(false, isset(InterfaceSync::replicas($gone['config'])['customer_net']), 'prune removes replica ownership');
+eq(['customer_net'], $gone['plan']['reset_interfaces'], 'prune resets removed synchronized interface');
+eq(['vlan777'], $gone['plan']['destroy_vlans'], 'prune destroys removed synchronized VLAN');
+eq(false, isset($gone['config']['interfaces']['customer_net']), 'prune removes only synchronized endpoint');
+eq(false, isset(InterfaceSync::assignments($gone['config'])['customer_net']), 'prune removes synchronized assignment');
+eq('core', InterfaceSync::assignments($gone['config'])['core_wan']['policy_id'], 'local core assignment retained');
 
 // A local interface with no replica/local-adoption ownership cannot be overwritten even if the identifier is arbitrary.
 $collision = base();
@@ -239,21 +240,16 @@ eq(true, str_contains($hook, "'sync_finalize' => 'api_extensions_haproxy_sync_fi
 eq(false, file_exists(__DIR__ . '/../src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php'), 'parallel config sync script removed');
 eq(false, file_exists(__DIR__ . '/../src/opnsense/mvc/app/controllers/OPNsense/ApiExtensions/Api/InterfaceSyncController.php'), 'parallel interface sync API controller removed');
 
-$replicaHandoffPayload = InterfaceSync::buildReplicaPayload($r['config'], 'endpoint');
-eq(InterfaceSync::validatePayload($payload), InterfaceSync::validatePayload($replicaHandoffPayload), 'replacement source exports endpoint replica with the same semantic payload');
-$ownerIdentity = [
-    'customer_net' => [
-        'vlan_uuid' => '11111111-1111-1111-1111-111111111111',
-        'assignment_uuid' => '22222222-2222-2222-2222-222222222222',
-    ],
-];
-$owner = InterfaceSync::reconcileAsOwner(base(), $replicaHandoffPayload, $ownerIdentity, fn()=> 'temporary-owner-uuid');
-eq('endpoint', InterfaceSync::assignments($owner['config'])['customer_net']['policy_id'], 'replacement target promotes interface to local owner');
-eq(false, isset(InterfaceSync::replicas($owner['config'])['customer_net']), 'replacement target does not retain replica ownership');
-eq('22222222-2222-2222-2222-222222222222', InterfaceSync::assignments($owner['config'])['customer_net']['@attributes']['uuid'], 'replacement target restores original primary assignment UUID');
-$ownerVlan = array_values(array_filter($owner['config']['vlans']['vlan'], fn($row)=>($row['vlanif'] ?? '') === 'vlan777'))[0];
-eq('11111111-1111-1111-1111-111111111111', $ownerVlan['@attributes']['uuid'], 'replacement target restores original primary VLAN UUID');
-eq(['customer_net'], $owner['plan']['promoted_owner_interfaces'], 'replacement plan reports promoted interface ownership');
-bad(fn()=>InterfaceSync::reconcileAsOwner($owner['config'], $replicaHandoffPayload, $ownerIdentity), 'replacement interface ownership handoff is one-shot');
+// Reverse synchronization and repeated forward synchronization must be
+// equivalent with no ownership promotion or saved UUID manifest.
+$reverse = InterfaceSync::buildPayload($r['config']);
+eq(InterfaceSync::validatePayload($payload), InterfaceSync::validatePayload($reverse), 'old sender -> new receiver -> old sender gives same semantic payload');
+$cycled = InterfaceSync::reconcile($source, $reverse, fn()=> 'not-used-uuid');
+eq(InterfaceSync::validatePayload($payload), InterfaceSync::validatePayload(InterfaceSync::buildPayload($cycled['config'])), 'reverse reconciliation preserves source semantics');
+$cycledTwice = InterfaceSync::reconcile($cycled['config'], $reverse, fn()=> 'not-used-uuid');
+eq(false, $cycledTwice['changed'], 'second reverse sync is idempotent after MVC canonicalization');
+$receiverUuid = array_values(array_filter($r['config']['vlans']['vlan'], fn($v)=>($v['vlanif'] ?? '')==='vlan777'))[0]['@attributes']['uuid'];
+$sourceUuid = array_values(array_filter($source['vlans']['vlan'], fn($v)=>($v['vlanif'] ?? '')==='vlan777'))[0]['@attributes']['uuid'];
+eq(false, $sourceUuid === $receiverUuid, 'different local VLAN UUIDs allowed');
 
 fwrite(STDOUT, "interface policy sync tests passed\n");

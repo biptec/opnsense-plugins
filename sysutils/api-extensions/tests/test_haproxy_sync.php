@@ -245,9 +245,9 @@ eq('receiver-uuid-2', $backendRows[0]['linkedServers'], 'backend remapped to rec
 eq('receiver-uuid-1', $backendRows[0]['healthCheck'], 'backend remapped to receiver-local healthcheck UUID');
 eq('192.0.2.44', $serverRows[0]['address'], 'server scalar configuration copied');
 eq('receiver-independent-frontend', $createdConfig['OPNsense']['HAProxy']['frontends']['frontend']['@attributes']['uuid'], 'frontend baseline untouched');
-eq('endpoint', HAProxySync::replicas($createdConfig)['healthcheck:hc-customer-example']['policy_id'], 'healthcheck replica ownership recorded');
-eq('endpoint', HAProxySync::replicas($createdConfig)['server:origin-customer-example']['policy_id'], 'server replica ownership recorded');
-eq('endpoint', HAProxySync::replicas($createdConfig)['backend:sni-customer.example']['policy_id'], 'backend replica ownership recorded');
+eq('endpoint', HAProxySync::assignments($createdConfig)['healthcheck:hc-customer-example']['policy_id'], 'healthcheck assigned by HA policy');
+eq('endpoint', HAProxySync::assignments($createdConfig)['server:origin-customer-example']['policy_id'], 'server assigned by HA policy');
+eq('endpoint', HAProxySync::assignments($createdConfig)['backend:sni-customer.example']['policy_id'], 'backend assigned by HA policy');
 
 $idempotent = HAProxySync::reconcile(
     $createdConfig,
@@ -340,7 +340,7 @@ $legacy['OPNsense']['HAProxy']['backends']['backend']['linkedServers'] = 'legacy
 $legacy['OPNsense']['HAProxy']['backends']['backend']['healthCheck'] = 'legacy-healthcheck-uuid';
 $legacy['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments'] = $source['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments'];
 $adopted = HAProxySync::reconcile($legacy, $payload, nextFactory('adopt-meta-'), nextFactory('unused-id-'));
-eq(['healthcheck:hc-customer-example', 'server:origin-customer-example', 'backend:sni-customer.example'], $adopted['plan']['adopted_local_assignments'], 'legacy dual-node objects adopted only with explicit matching policies');
+eq(3, count(HAProxySync::assignments($adopted['config'])), 'matching existing assignments remain directly synchronized');
 $adoptedHealthchecks = rows($adopted['config']['OPNsense']['HAProxy']['healthchecks'], 'healthcheck');
 $adoptedServers = rows($adopted['config']['OPNsense']['HAProxy']['servers'], 'server');
 $adoptedBackends = rows($adopted['config']['OPNsense']['HAProxy']['backends'], 'backend');
@@ -351,7 +351,7 @@ eq('legacy-server-id', $adoptedServers[0]['id'], 'adoption preserves receiver se
 eq('legacy-backend-uuid', $adoptedBackends[0]['@attributes']['uuid'], 'adoption preserves receiver backend UUID');
 eq('legacy-server-uuid', $adoptedBackends[0]['linkedServers'], 'adopted backend remains linked to receiver server UUID');
 eq('legacy-healthcheck-uuid', $adoptedBackends[0]['healthCheck'], 'adopted backend remains linked to receiver healthcheck UUID');
-eq([], HAProxySync::assignments($adopted['config']), 'adopted local assignments removed');
+eq('endpoint', HAProxySync::assignments($adopted['config'])['server:origin-customer-example']['policy_id'], 'local assignment policy is retained');
 
 $emptyPayload = $payload;
 $emptyPayload['objects'] = [];
@@ -364,7 +364,7 @@ $pruned = HAProxySync::reconcile(
 eq([], rows($pruned['config']['OPNsense']['HAProxy']['healthchecks'], 'healthcheck'), 'stale peer-owned healthcheck pruned');
 eq([], rows($pruned['config']['OPNsense']['HAProxy']['servers'], 'server'), 'stale peer-owned server pruned');
 eq([], rows($pruned['config']['OPNsense']['HAProxy']['backends'], 'backend'), 'stale peer-owned backend pruned');
-eq([], HAProxySync::replicas($pruned['config']), 'stale replica ownership pruned');
+eq([], HAProxySync::assignments($pruned['config']), 'stale synchronized policy assignments pruned');
 eq('nc-sni-tls', $pruned['config']['OPNsense']['HAProxy']['frontends']['frontend']['name'], 'local frontend survives prune');
 
 $unsafePrune = $createdConfig;
@@ -469,45 +469,15 @@ eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['healthcheck
 eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['servers'], 'server')), 'native MVC sees first synchronized server');
 eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['backends'], 'backend')), 'native MVC sees first synchronized backend');
 
+// The new Rigi accepts the old Etna v2 payload, stores normal policy
+// assignments, and immediately becomes a valid source for the reverse sync.
 $serializedEmpty = receiverBase();
-$serializedEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_replicas'] = '';
+$serializedEmpty['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments'] = '';
 $serializedCreate = HAProxySync::reconcile($serializedEmpty, $payload, nextFactory('serialized-uuid-'), nextFactory('serialized-id-'));
-eq(3, count(HAProxySync::replicas($serializedCreate['config'])), 'empty serialized replica container accepts first objects');
-
-$replicaHandoffPayload = HAProxySync::buildReplicaPayload($createdConfig, 'endpoint');
-eq(HAProxySync::validatePayload($payload), HAProxySync::validatePayload($replicaHandoffPayload), 'replacement source exports HAProxy replicas with the same semantic payload');
-$ownerIdentity = [
-    'healthcheck:hc-customer-example' => [
-        'object_uuid' => '11111111-1111-1111-1111-111111111111',
-        'assignment_uuid' => '21111111-1111-1111-1111-111111111111',
-    ],
-    'server:origin-customer-example' => [
-        'object_uuid' => '12222222-2222-2222-2222-222222222222',
-        'assignment_uuid' => '22222222-2222-2222-2222-222222222222',
-    ],
-    'backend:sni-customer.example' => [
-        'object_uuid' => '13333333-3333-3333-3333-333333333333',
-        'assignment_uuid' => '23333333-3333-3333-3333-333333333333',
-    ],
-];
-$owner = HAProxySync::reconcileAsOwner(
-    receiverBase(),
-    $replicaHandoffPayload,
-    $ownerIdentity,
-    nextFactory('temporary-owner-uuid-'),
-    nextFactory('temporary-owner-id-')
-);
-eq([], HAProxySync::replicas($owner['config']), 'replacement target does not retain HAProxy replica ownership');
-eq(3, count(HAProxySync::assignments($owner['config'])), 'replacement target promotes all HAProxy objects to local owner');
-$ownerHealthchecks = rows($owner['config']['OPNsense']['HAProxy']['healthchecks'], 'healthcheck');
-$ownerServers = rows($owner['config']['OPNsense']['HAProxy']['servers'], 'server');
-$ownerBackends = rows($owner['config']['OPNsense']['HAProxy']['backends'], 'backend');
-eq('11111111-1111-1111-1111-111111111111', $ownerHealthchecks[0]['@attributes']['uuid'], 'replacement restores original primary healthcheck UUID');
-eq('12222222-2222-2222-2222-222222222222', $ownerServers[0]['@attributes']['uuid'], 'replacement restores original primary server UUID');
-eq('13333333-3333-3333-3333-333333333333', $ownerBackends[0]['@attributes']['uuid'], 'replacement restores original primary backend UUID');
-eq('12222222-2222-2222-2222-222222222222', $ownerBackends[0]['linkedServers'], 'replacement backend relation remaps to restored primary server UUID');
-eq('11111111-1111-1111-1111-111111111111', $ownerBackends[0]['healthCheck'], 'replacement backend relation remaps to restored primary healthcheck UUID');
-eq(HAProxySync::validatePayload($replicaHandoffPayload), HAProxySync::validatePayload(HAProxySync::buildPayload($owner['config'])), 'promoted Etna owner can immediately drive the normal forward sync payload');
-bad(fn()=>HAProxySync::reconcileAsOwner($owner['config'], $replicaHandoffPayload, $ownerIdentity), 'replacement HAProxy ownership handoff is one-shot');
+eq(3, count(HAProxySync::assignments($serializedCreate['config'])), 'empty assignment container accepts old v2 payload');
+eq(HAProxySync::validatePayload($payload), HAProxySync::validatePayload(HAProxySync::buildPayload($createdConfig)), 'receiver emits original semantic payload in reverse');
+$cycled = HAProxySync::reconcile($source, HAProxySync::buildPayload($createdConfig), nextFactory('cycle-uuid-'), nextFactory('cycle-id-'));
+eq(HAProxySync::validatePayload($payload), HAProxySync::validatePayload(HAProxySync::buildPayload($cycled['config'])), 'reverse sync preserves semantic relations and policies');
+eq('source-server-uuid', rows($cycled['config']['OPNsense']['HAProxy']['servers'], 'server')[0]['@attributes']['uuid'], 'reverse keeps source-local HAProxy UUID');
 
 fwrite(STDOUT, "HAProxy policy sync tests passed\n");

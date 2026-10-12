@@ -103,13 +103,9 @@ class HaproxyPolicyController extends ApiMutableModelControllerBase
         $name = trim((string)($posted['object_name'] ?? ''));
         $config = Config::getInstance()->toArray();
         $inventory = HAProxySync::inventory($config);
-        $replicas = HAProxySync::replicas($config);
         $key = $this->objectKey($type, $name);
         if (!$this->objectExists($inventory, $type, $name)) {
             return ['result' => 'failed', 'message' => sprintf('HAProxy %s %s does not exist.', $type, $name)];
-        }
-        if (isset($replicas[$key])) {
-            return ['result' => 'failed', 'message' => sprintf('HA peer replica %s is read-only on this node.', $key)];
         }
         $policies = InterfaceSync::policies($config);
         $policyUuid = $this->resolvePolicyUuid((string)($posted['policy_id'] ?? ''), $policies);
@@ -168,7 +164,6 @@ class HaproxyPolicyController extends ApiMutableModelControllerBase
         $config = Config::getInstance()->toArray();
         $policies = InterfaceSync::policies($config);
         $inventory = HAProxySync::inventory($config);
-        $replicas = HAProxySync::replicas($config);
         $normalized = [];
         foreach ($requested as $key => $policyId) {
             $parts = $this->splitObjectKey((string)$key);
@@ -180,9 +175,6 @@ class HaproxyPolicyController extends ApiMutableModelControllerBase
             $objectKey = $this->objectKey($type, $name);
             if (!$this->objectExists($inventory, $type, $name)) {
                 return ['result' => 'failed', 'message' => sprintf('HAProxy %s %s does not exist.', $type, $name)];
-            }
-            if (isset($replicas[$objectKey])) {
-                return ['result' => 'failed', 'message' => sprintf('HA peer replica %s is read-only on this node.', $objectKey)];
             }
             if (!isset($policies[$policyId])) {
                 return ['result' => 'failed', 'message' => sprintf('Policy %s does not exist.', $policyId)];
@@ -248,22 +240,13 @@ class HaproxyPolicyController extends ApiMutableModelControllerBase
         $config = Config::getInstance()->toArray();
         $policies = InterfaceSync::policies($config);
         $assignments = HAProxySync::assignments($config);
-        $replicas = HAProxySync::replicas($config);
         $inventory = HAProxySync::inventory($config);
         $rows = [];
         foreach ($inventory['objects'] as $key => $object) {
             $type = $object['object_type'];
             $name = $object['object_name'];
             $raw = $object['row'];
-            $policyId = '';
-            $owner = 'unassigned';
-            if (isset($replicas[$key])) {
-                $policyId = $replicas[$key]['policy_id'];
-                $owner = 'ha_peer';
-            } elseif (isset($assignments[$key])) {
-                $policyId = $assignments[$key]['policy_id'];
-                $owner = 'local';
-            }
+            $policyId = $assignments[$key]['policy_id'] ?? '';
             $policy = $policies[$policyId] ?? null;
 
             if ($type === 'server') {
@@ -291,7 +274,6 @@ class HaproxyPolicyController extends ApiMutableModelControllerBase
                 'policy_id' => $policyId,
                 'policy_description' => is_array($policy) ? $policy['description'] : '',
                 'synchronize' => is_array($policy) ? $policy['synchronize'] : false,
-                'owner' => $owner,
             ];
         }
 
@@ -316,7 +298,7 @@ class HaproxyPolicyController extends ApiMutableModelControllerBase
                 'policy_id' => $policyId,
                 'policy_description' => is_array($policy) ? $policy['description'] : '',
                 'synchronize' => is_array($policy) ? $policy['synchronize'] : false,
-                'owner' => 'stale',
+                'stale' => true,
             ];
         }
         usort($rows, fn($a, $b) => [$a['object_type'], $a['object_name']] <=> [$b['object_type'], $b['object_name']]);
@@ -342,7 +324,7 @@ class HaproxyPolicyController extends ApiMutableModelControllerBase
             };
             return $this->searchRecordsetBase(
                 $this->overviewState()['rows'],
-                ['object_type', 'object_name', 'description', 'details', 'policy_id', 'policy_description', 'owner', 'assignment_uuid'],
+                ['object_type', 'object_name', 'description', 'details', 'policy_id', 'policy_description', 'stale', 'assignment_uuid'],
                 'object_name',
                 $filter
             );
@@ -362,8 +344,8 @@ class HaproxyPolicyController extends ApiMutableModelControllerBase
                 'status' => 'ok',
                 'ha_service_enabled' => HAProxySync::isEnabled($state['config']),
                 'policies' => array_values($state['policies']),
-                'unassigned' => count(array_filter($state['rows'], fn($row) => $row['owner'] === 'unassigned')),
-                'stale_assignments' => count(array_filter($state['rows'], fn($row) => $row['owner'] === 'stale')),
+                'unassigned' => count(array_filter($state['rows'], fn($row) => trim((string)$row['policy_id']) === '')),
+                'stale_assignments' => count(array_filter($state['rows'], fn($row) => (bool)($row['stale'] ?? false))),
             ];
         } catch (\Throwable $error) {
             return ['status' => 'failed', 'message' => $error->getMessage()];

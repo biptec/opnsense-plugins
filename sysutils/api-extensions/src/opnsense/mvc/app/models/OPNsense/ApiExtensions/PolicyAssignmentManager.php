@@ -52,24 +52,13 @@ final class PolicyAssignmentManager
         $config = self::config();
         $policies = InterfaceSync::policies($config);
         $assignments = InterfaceSync::assignments($config);
-        $replicas = InterfaceSync::replicas($config);
-
-        $owner = 'unassigned';
-        $policyId = '';
-        if (isset($replicas[$identifier])) {
-            $owner = 'ha_peer';
-            $policyId = $replicas[$identifier]['policy_id'];
-        } elseif (isset($assignments[$identifier])) {
-            $owner = 'local';
-            $policyId = $assignments[$identifier]['policy_id'];
-        }
+        $policyId = $assignments[$identifier]['policy_id'] ?? '';
 
         $policy = $policies[$policyId] ?? null;
         return [
             'policy_id' => $policyId,
             'policy_description' => is_array($policy) ? $policy['description'] : '',
             'synchronize' => is_array($policy) ? (bool)$policy['synchronize'] : false,
-            'owner' => $owner,
             'ha_service_enabled' => InterfaceSync::isEnabled($config),
         ];
     }
@@ -82,24 +71,13 @@ final class PolicyAssignmentManager
         $config = self::config();
         $policies = InterfaceSync::policies($config);
         $assignments = HAProxySync::assignments($config);
-        $replicas = HAProxySync::replicas($config);
-
-        $owner = 'unassigned';
-        $policyId = '';
-        if (isset($replicas[$key])) {
-            $owner = 'ha_peer';
-            $policyId = $replicas[$key]['policy_id'];
-        } elseif (isset($assignments[$key])) {
-            $owner = 'local';
-            $policyId = $assignments[$key]['policy_id'];
-        }
+        $policyId = $assignments[$key]['policy_id'] ?? '';
 
         $policy = $policies[$policyId] ?? null;
         return [
             'policy_id' => $policyId,
             'policy_description' => is_array($policy) ? $policy['description'] : '',
             'synchronize' => is_array($policy) ? (bool)$policy['synchronize'] : false,
-            'owner' => $owner,
             'ha_service_enabled' => HAProxySync::isEnabled($config),
         ];
     }
@@ -127,10 +105,6 @@ final class PolicyAssignmentManager
         if (!isset($config['interfaces'][$identifier]) || !is_array($config['interfaces'][$identifier])) {
             throw new \InvalidArgumentException(sprintf('Interface %s does not exist.', $identifier));
         }
-        if (isset(InterfaceSync::replicas($config)[$identifier])) {
-            throw new \InvalidArgumentException(sprintf('HA peer replica %s is read-only on this node.', $identifier));
-        }
-
         $policies = InterfaceSync::policies($config);
         $policy = self::resolvePolicy($policyReference, $policies);
         $model = new HASyncPolicy();
@@ -171,17 +145,6 @@ final class PolicyAssignmentManager
         }
     }
 
-    public static function assertHAProxyMutable(string $type, string $name): void
-    {
-        $state = self::haproxyState($type, $name);
-        if ($state['owner'] === 'ha_peer') {
-            throw new \InvalidArgumentException(sprintf(
-                'HA peer replica %s is read-only on this node.',
-                self::objectKey($type, $name)
-            ));
-        }
-    }
-
     public static function setHAProxy(
         string $type,
         string $name,
@@ -202,10 +165,6 @@ final class PolicyAssignmentManager
         if (!isset($inventory['objects'][$key])) {
             throw new \InvalidArgumentException(sprintf('HAProxy %s %s does not exist.', $type, $name));
         }
-        if (isset(HAProxySync::replicas($config)[$key])) {
-            throw new \InvalidArgumentException(sprintf('HA peer replica %s is read-only on this node.', $key));
-        }
-
         $policies = InterfaceSync::policies($config);
         $policy = self::resolvePolicy($policyReference, $policies);
         $model = new HASyncPolicy();
