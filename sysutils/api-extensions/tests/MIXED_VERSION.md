@@ -9,6 +9,11 @@ The interface fixture contains the exact new Ubuntu endpoint logical
 identifier `ep_ha_issue_00474f9e`, VLAN `3990`, and policy `endpoint`.
 The HAProxy fixture contains a linked healthcheck, server and backend,
 preserving stable semantic names but not the sender's local object UUIDs.
+Both categories use the same synthetic old-Etna core/services/endpoint
+policy table, as they would on one actual router. A separate negative test
+deliberately removes the local-only services policy from one category payload:
+the receiver must retain its local definition while pruning a truly unused
+synchronized policy omitted by the sender.
 
 Regenerate using an **offline PHP 8.3 Docker container**, directly from the
 old Git objects (no checkout change and no network inside container):

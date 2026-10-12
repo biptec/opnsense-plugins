@@ -241,6 +241,64 @@ mixedEq(false,
     )['changed'],
     'new Etna repeated HAProxy sync is idempotent');
 
+// Native receiver processes Interfaces and HAProxy in the SAME config.xml.
+// Old Etna sources share a coherent policy table across both categories.
+// The same receiver's interface assignments must survive HAProxy updates.
+$combinedReceiver = $interfaceReceived;
+$combinedReceiver['OPNsense']['HAProxy'] = $haproxyReceiver['OPNsense']['HAProxy'];
+$combinedReceiver['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments'] = '';
+$combinedResult = HAProxySync::reconcile(
+    $combinedReceiver, $oldHAProxy,
+    mixedUuidFactory('combined-rigi-ha-uuid-'),
+    mixedUuidFactory('combined-rigi-ha-id-')
+);
+$combinedConfig = $combinedResult['config'];
+mixedEq(true, isset(InterfaceSync::policies($combinedConfig)['services']),
+    'HAProxy sync preserves local services HA policy from interface phase');
+mixedEq('endpoint',
+    InterfaceSync::assignments($combinedConfig)['ep_ha_issue_00474f9e']['policy_id'],
+    'HAProxy sync preserves regular shared endpoint interface assignment');
+mixedEq(
+    InterfaceSync::validatePayload($oldInterface),
+    InterfaceSync::validatePayload(InterfaceSync::buildPayload($combinedConfig)),
+    'combined old interface and HAProxy payload preserves InterfaceSync semantics'
+);
+mixedEq(
+    HAProxySync::validatePayload($oldHAProxy),
+    HAProxySync::validatePayload(HAProxySync::buildPayload($combinedConfig)),
+    'combined old interface and HAProxy payload preserves HAProxy semantics'
+);
+
+// Defensive mixed-version policy-subset case: an old peer may send a v2
+// category payload that omits a node-local policy unused by that category.
+// It may not delete local core/services policy definitions even if those
+// definitions currently have zero assignments. Unused synchronized policies,
+// in contrast, must remain authoritative prune candidates.
+$partialOldHaproxy = $oldHAProxy;
+$partialOldHaproxy['policies'] = array_values(array_filter(
+    $oldHAProxy['policies'],
+    fn($p) => $p['id'] !== 'services'
+));
+$partialReceiver = $combinedReceiver;
+$partialReceiver['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['shared']['policies']['policy'][] = [
+    '@attributes' => ['uuid' => 'receiver-obsolete-policy-uuid'],
+    'id' => 'obsolete_sync',
+    'description' => 'Unreferenced prior synchronized policy',
+    'synchronize' => '1',
+];
+$partialResult = HAProxySync::reconcile(
+    $partialReceiver, $partialOldHaproxy,
+    mixedUuidFactory('partial-ha-uuid-'),
+    mixedUuidFactory('partial-ha-id-')
+);
+$partialPolicies = InterfaceSync::policies($partialResult['config']);
+mixedEq(true, isset($partialPolicies['services']), 'absent unassigned local services policy retained');
+mixedEq(false, isset($partialPolicies['obsolete_sync']), 'absent unassigned synchronized policy pruned');
+mixedEq(1, $partialResult['plan']['policies']['retained_local'], 'one local-only policy explicitly retained');
+mixedEq('endpoint',
+    InterfaceSync::assignments($partialResult['config'])['ep_ha_issue_00474f9e']['policy_id'],
+    'policy subset must never break existing interface policy assignment');
+
 echo "MIXED_VERSION_V2_PASS old_etna=7dc9649e new_rigi=current"
     . " vlan=3990 interface=ep_ha_issue_00474f9e haproxy=3"
     . " local_core_preserved=1 reverse_new_etna=1 repeat_idempotent=1\n";

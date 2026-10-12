@@ -103,7 +103,16 @@ def main():
         old_haproxy.index("$source = sourceConfig();")
     ]
     haproxy_body = (
-        "$payload=HAProxySync::buildPayload(sourceConfig());\n"
+        "$source=sourceConfig();\n"
+        "// Both native HA categories share ONE policy table on the same old Etna.\n"
+        "// The old unit-test source fixtures name the same policy differently;\n"
+        "// normalize that synthetic mismatch to a coherent real-router model.\n"
+        "$source['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['shared']['policies']['policy'] = [\n"
+        "  ['@attributes'=>['uuid'=>'p-core'], 'id'=>'core', 'description'=>'Router core','synchronize'=>'0'],\n"
+        "  ['@attributes'=>['uuid'=>'p-services'], 'id'=>'services', 'description'=>'Node services','synchronize'=>'0'],\n"
+        "  ['@attributes'=>['uuid'=>'p-endpoint'], 'id'=>'endpoint', 'description'=>'HA shared endpoint networks','synchronize'=>'1'],\n"
+        "];\n"
+        "$payload=HAProxySync::buildPayload($source);\n"
         "echo json_encode($payload,JSON_THROW_ON_ERROR|JSON_UNESCAPED_SLASHES),\"\\n\";\n"
     )
     iface = php_produce(("InterfaceSync.php",), iface_defs, iface_body)

@@ -92,7 +92,12 @@
         "synchronize": false
       },
       {
-        "description": "HA shared service objects",
+        "description": "Node services",
+        "id": "services",
+        "synchronize": false
+      },
+      {
+        "description": "HA shared endpoint networks",
         "id": "endpoint",
         "synchronize": true
       }

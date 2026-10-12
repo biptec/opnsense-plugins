@@ -591,12 +591,29 @@ final class InterfaceSync
                 }
             }
             foreach ($current as $id => $row) {
-                if (!isset($desired[$id]) && isset($references[$id])) {
+                if (isset($desired[$id])) {
+                    continue;
+                }
+                // Policies with synchronize=false are explicitly node-local,
+                // including policies that currently have no assignments.
+                // HAProxy and Interfaces share this policy table but can
+                // receive payloads from different mixed-version peers with
+                // different policy subsets; neither category may erase a
+                // receiver's local core/services policy just because the
+                // sender did not enumerate it.
+                if (!self::flag($row['synchronize'] ?? null)) {
+                    $keep[$id] = $row;
+                    continue;
+                }
+                if (isset($references[$id])) {
                     self::fail(sprintf('cannot prune interface policy %s while it is still assigned to a local HA policy object', $id));
                 }
+                // Unreferenced synchronized policies omitted by the sender
+                // are authoritative prune candidates and may be discarded.
             }
         }
 
+        $retainedLocalCount = count($keep);
         foreach ($desired as $id => $row) {
             $attributes = is_array($current[$id]['@attributes'] ?? null) ? $current[$id]['@attributes'] : [];
             if (empty($attributes['uuid'])) {
@@ -630,7 +647,7 @@ final class InterfaceSync
         self::setPolicyRows($config, $ordered);
         return [
             'desired' => count($desired),
-            'retained_local' => count($keep) - count($desired),
+            'retained_local' => $retainedLocalCount,
         ];
     }
 
