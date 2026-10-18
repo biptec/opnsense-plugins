@@ -310,6 +310,59 @@ class CarpHealthTests(unittest.TestCase):
         self.assertEqual(states[0]["carp_state"], "MISSING")
         self.assertEqual(commands.mutations(), [])
 
+    def test_checker_config_load_retries_transient_parse_error(self):
+        config = self.make_config()
+        attempts = iter([
+            carp_health.ET.ParseError("partial config"),
+            carp_health.ET.ParseError("partial config"),
+            config,
+        ])
+        sleeps = []
+
+        def loader():
+            value = next(attempts)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        loaded = carp_health.load_config_for_checker(
+            loader,
+            attempts=5,
+            delay=0.05,
+            sleep_func=sleeps.append,
+        )
+        self.assertEqual(loaded, config)
+        self.assertEqual(sleeps, [0.05, 0.05])
+
+    def test_checker_config_load_fails_closed_after_retry_budget(self):
+        calls = []
+        sleeps = []
+
+        def loader():
+            calls.append(True)
+            raise carp_health.ET.ParseError("still partial")
+
+        with self.assertRaises(carp_health.ET.ParseError):
+            carp_health.load_config_for_checker(
+                loader,
+                attempts=3,
+                delay=0.05,
+                sleep_func=sleeps.append,
+            )
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleeps, [0.05, 0.05])
+
+    def test_checker_config_load_does_not_retry_unrelated_errors(self):
+        calls = []
+
+        def loader():
+            calls.append(True)
+            raise RuntimeError("unexpected")
+
+        with self.assertRaises(RuntimeError):
+            carp_health.load_config_for_checker(loader, attempts=5, sleep_func=lambda _: None)
+        self.assertEqual(len(calls), 1)
+
     def test_checker_handles_stale_and_mismatched_state(self):
         config = self.make_config()
         tracker = carp_health.HealthTracker(1, 1)

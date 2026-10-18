@@ -2,10 +2,10 @@
 import sys
 sys.path.insert(0, "/usr/local/opnsense/scripts/OPNsense/ApiExtensions")
 
-from carp_health import checker_exit_code, load_config, read_state
+from carp_health import checker_exit_code, load_config_for_checker, read_state
 
 try:
-    config = load_config()
+    config = load_config_for_checker()
     state = read_state()
     sys.exit(checker_exit_code(config, state))
 except Exception:
