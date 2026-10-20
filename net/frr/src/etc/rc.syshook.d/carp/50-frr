@@ -32,21 +32,21 @@ require_once('config.inc');
 require_once('util.inc');
 require_once('plugins.inc.d/frr.inc');
 
+$subsystem = !empty($argv[1]) ? $argv[1] : '';
+$type = !empty($argv[2]) ? $argv[2] : '';
+
+if ($type != 'MASTER' && $type != 'BACKUP') {
+    log_msg("Carp '$type' event unknown from source '{$subsystem}'");
+    exit(1);
+}
+
+if (!strstr($subsystem, '@')) {
+    log_msg("Carp '$type' event triggered from wrong source '{$subsystem}'");
+    exit(1);
+}
+
 if (frr_carp_enabled()) {
     // XXX: carp enable/disable mode
-    $subsystem = !empty($argv[1]) ? $argv[1] : '';
-    $type = !empty($argv[2]) ? $argv[2] : '';
-
-    if ($type != 'MASTER' && $type != 'BACKUP') {
-        log_msg("Carp '$type' event unknown from source '{$subsystem}'");
-        exit(1);
-    }
-
-    if (!strstr($subsystem, '@')) {
-        log_msg("Carp '$type' event triggered from wrong source '{$subsystem}'");
-        exit(1);
-    }
-
     switch ($type) {
         case 'MASTER':
             // XXX: This will stall if stdout is not redirected
@@ -60,4 +60,10 @@ if (frr_carp_enabled()) {
     // XXX: when not toggling between active and disabled, pass event so underlaying protocols can
     //      determine which actions to perform when reaching a certain state.
     mwexecfm('/usr/local/opnsense/scripts/frr/carp_event_handler');
+
+    // The syshook runs after the kernel has reached the reported CARP state.
+    // ConnectedCarpEventHandler above first reconciles reachability of the
+    // endpoint subnet; dependent native static routes can then be re-resolved
+    // against that actual local/peer path.
+    frr_carp_staticroutes_reconcile($subsystem, $type);
 }
