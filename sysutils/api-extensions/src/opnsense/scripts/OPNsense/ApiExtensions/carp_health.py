@@ -189,6 +189,16 @@ def load_config(path=CONFIG_PATH):
     return Config(enabled, interval, failure, recovery, tuple(checks), tuple(carp_vhids), signature)
 
 
+def load_config_for_checker(load_func=load_config, attempts=5, delay=0.05, sleep_func=time.sleep):
+    for attempt in range(attempts):
+        try:
+            return load_func()
+        except (OSError, ET.ParseError):
+            if attempt + 1 >= attempts:
+                raise
+            sleep_func(delay)
+
+
 def resolve_vhid_targets(check, config):
     """Resolve automatic CARP scopes while preserving explicit overrides."""
     if check.scope == "interface":

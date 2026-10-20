@@ -5,6 +5,7 @@ namespace OPNsense\ApiExtensions\Api;
 use OPNsense\ApiExtensions\HAProxySync;
 use OPNsense\ApiExtensions\InterfaceSync;
 use OPNsense\Base\ApiMutableModelControllerBase;
+use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
 
 class InterfacePolicyController extends ApiMutableModelControllerBase
@@ -27,9 +28,24 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
         return $this->addBase('policy', 'shared.policies.policy');
     }
 
+    private function refreshStaticRouteConsumers(): void
+    {
+        (new Backend())->configdRun('api_extensions refresh_staticroute_consumers');
+    }
+
+    private function refreshAfterMutation(array $result): array
+    {
+        if (in_array($result['result'] ?? '', ['saved', 'deleted'], true)) {
+            $this->refreshStaticRouteConsumers();
+        }
+        return $result;
+    }
+
     public function setPolicyAction($uuid)
     {
-        return $this->setBase('policy', 'shared.policies.policy', $uuid);
+        return $this->refreshAfterMutation(
+            $this->setBase('policy', 'shared.policies.policy', $uuid)
+        );
     }
 
     public function delPolicyAction($uuid)
@@ -118,7 +134,9 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
         if ($policyUuid === null) {
             return ['result' => 'failed', 'message' => 'The selected interface policy does not exist.'];
         }
-        return $this->addBase('assignment', 'assignments.assignment', ['policy_id' => $policyUuid]);
+        return $this->refreshAfterMutation(
+            $this->addBase('assignment', 'assignments.assignment', ['policy_id' => $policyUuid])
+        );
     }
 
     public function setAssignmentAction($uuid)
@@ -132,7 +150,9 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
         if ($policyUuid === null) {
             return ['result' => 'failed', 'message' => 'The selected interface policy does not exist.'];
         }
-        return $this->setBase('assignment', 'assignments.assignment', $uuid, ['policy_id' => $policyUuid]);
+        return $this->refreshAfterMutation(
+            $this->setBase('assignment', 'assignments.assignment', $uuid, ['policy_id' => $policyUuid])
+        );
     }
 
     public function delAssignmentAction($uuid)
@@ -140,7 +160,9 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
         // Terraform must remove the policy relation before deleting the core interface resource.
         // During that short teardown window InterfaceSync::validateCoverage() makes HA synchronization
         // fail closed. The normal WebUI intentionally exposes reassignment, not assignment deletion.
-        return $this->delBase('assignments.assignment', $uuid);
+        return $this->refreshAfterMutation(
+            $this->delBase('assignments.assignment', $uuid)
+        );
     }
 
     private function applyAssignments(array $interfaces, string $policyId): array
@@ -186,6 +208,7 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
             return $result;
         }
         $this->save(false, true);
+        $this->refreshStaticRouteConsumers();
         return [
             'result' => 'saved',
             'count' => count($interfaces),
@@ -260,6 +283,7 @@ class InterfacePolicyController extends ApiMutableModelControllerBase
             return $result;
         }
         $this->save(false, true);
+        $this->refreshStaticRouteConsumers();
         return [
             'result' => 'saved',
             'count' => count($normalized),
