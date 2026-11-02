@@ -141,6 +141,12 @@
         <help><![CDATA[If disabled, server certificate is not verified. Otherwise the certificate provided by the server is verified using CAs and optional CRLs. <b>Please note that this setting can be overriden by the global configuration.</b><br/><div class="text-info"><b>NOTE:</b> It is critically important to verify server certificates when using SSL to connect to servers, otherwise the communication is prone to trivial man-in-the-middle attacks rendering SSL totally useless.</div>]]></help>
     </field>
     <field>
+        <id>server.sslVerifyHost</id>
+        <label>SSL Verify Hostname</label>
+        <type>text</type>
+        <help><![CDATA[Optional hostname verified against the backend certificate subject/SAN when certificate verification is enabled. Configure this together with SSL SNI for strict backend identity verification.]]></help>
+    </field>
+    <field>
         <id>server.sslCA</id>
         <label>SSL Verify CA</label>
         <type>select_multiple</type>

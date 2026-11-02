@@ -1565,6 +1565,11 @@
                     <Default>1</Default>
                     <Required>Y</Required>
                 </sslVerify>
+                <sslVerifyHost type="TextField">
+                    <Mask>/^([0-9a-zA-Z._\-]){1,255}$/u</Mask>
+                    <ValidationMessage>Should be a valid hostname between 1 and 255 characters.</ValidationMessage>
+                    <Required>N</Required>
+                </sslVerifyHost>
                 <sslCA type="CertificateField">
                     <Required>N</Required>
                     <Type>ca</Type>
