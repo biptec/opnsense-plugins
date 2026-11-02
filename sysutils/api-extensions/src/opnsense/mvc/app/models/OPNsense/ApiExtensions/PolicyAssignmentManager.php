@@ -154,8 +154,8 @@ final class PolicyAssignmentManager
         $type = trim($type);
         $name = trim($name);
         $previousName = trim((string)($previousName ?? $name));
-        if (!in_array($type, ['healthcheck', 'server', 'backend'], true) || $name === '') {
-            throw new \InvalidArgumentException('HAProxy policy assignment requires a healthcheck, server or backend name.');
+        if (!in_array($type, ['healthcheck', 'server', 'backend', 'frontend'], true) || $name === '') {
+            throw new \InvalidArgumentException('HAProxy policy assignment requires a healthcheck, server, backend or frontend name.');
         }
 
         Config::getInstance()->lock();

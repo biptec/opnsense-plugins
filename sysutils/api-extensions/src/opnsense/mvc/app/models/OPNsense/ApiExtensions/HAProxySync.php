@@ -5,10 +5,11 @@ require_once __DIR__ . '/InterfaceSync.php';
 
 final class HAProxySync
 {
-    public const VERSION = 2;
+    public const VERSION = 3;
+    public const LEGACY_VERSION = 2;
     public const HA_SYNC_ITEM = 'haproxy_objects';
 
-    private const OBJECT_TYPES = ['healthcheck', 'server', 'backend'];
+    private const OBJECT_TYPES = ['healthcheck', 'server', 'backend', 'frontend'];
     private const OBJECT_NAME = '/^[0-9A-Za-z._-]{1,255}$/D';
     private const SERVER_UNSUPPORTED_REFERENCES = [
         'linkedResolver',
@@ -23,6 +24,15 @@ final class HAProxySync
         'linkedMailer',
         'basicAuthUsers',
         'basicAuthGroups',
+        'linkedActions',
+        'linkedErrorfiles',
+    ];
+    private const FRONTEND_UNSUPPORTED_REFERENCES = [
+        'ssl_clientAuthCAs',
+        'ssl_clientAuthCRLs',
+        'basicAuthUsers',
+        'basicAuthGroups',
+        'linkedCpuAffinityRules',
         'linkedActions',
         'linkedErrorfiles',
     ];
@@ -156,7 +166,7 @@ final class HAProxySync
     {
         $value = trim((string)$value);
         if (!in_array($value, self::OBJECT_TYPES, true)) {
-            self::fail('HAProxy sync object_type must be healthcheck, server or backend');
+            self::fail('HAProxy sync object_type must be healthcheck, server, backend or frontend');
         }
         return $value;
     }
@@ -281,6 +291,7 @@ final class HAProxySync
             'healthcheck' => 'healthchecks',
             'server' => 'servers',
             'backend' => 'backends',
+            'frontend' => 'frontends',
             default => throw new \InvalidArgumentException('unsupported HAProxy object type'),
         };
         return self::containerRows($root[$section] ?? [], $type, 'OPNsense.HAProxy.' . $section);
@@ -291,6 +302,7 @@ final class HAProxySync
         $objects = [];
         $serverUuidToName = [];
         $healthcheckUuidToName = [];
+        $backendUuidToName = [];
         foreach (self::OBJECT_TYPES as $type) {
             foreach (self::haProxyRows($config, $type) as $row) {
                 if (!is_array($row)) {
@@ -310,7 +322,7 @@ final class HAProxySync
                     'id' => $id,
                     'row' => $row,
                 ];
-                if ($type === 'server' || $type === 'healthcheck') {
+                if (in_array($type, ['server', 'healthcheck', 'backend', 'frontend'], true)) {
                     if ($uuid === '') {
                         self::fail('HAProxy ' . $type . ' ' . $name . ' is missing its MVC UUID');
                     }
@@ -319,11 +331,16 @@ final class HAProxySync
                             self::fail('duplicate HAProxy server MVC UUID');
                         }
                         $serverUuidToName[$uuid] = $name;
-                    } else {
+                    } elseif ($type === 'healthcheck') {
                         if (isset($healthcheckUuidToName[$uuid])) {
                             self::fail('duplicate HAProxy healthcheck MVC UUID');
                         }
                         $healthcheckUuidToName[$uuid] = $name;
+                    } elseif ($type === 'backend') {
+                        if (isset($backendUuidToName[$uuid])) {
+                            self::fail('duplicate HAProxy backend MVC UUID');
+                        }
+                        $backendUuidToName[$uuid] = $name;
                     }
                 }
             }
@@ -333,6 +350,7 @@ final class HAProxySync
             'objects' => $objects,
             'server_uuid_to_name' => $serverUuidToName,
             'healthcheck_uuid_to_name' => $healthcheckUuidToName,
+            'backend_uuid_to_name' => $backendUuidToName,
         ];
     }
 
@@ -375,17 +393,93 @@ final class HAProxySync
         return trim((string)$value) !== '';
     }
 
+    private static function certificateIndexes(array $config): array
+    {
+        $byRef = [];
+        $byDescription = [];
+        foreach (self::containerRows($config['cert'] ?? [], 'cert', 'system certificate container') as $row) {
+            if (!is_array($row)) {
+                self::fail('invalid system certificate record');
+            }
+            $ref = trim((string)($row['refid'] ?? ''));
+            $description = trim((string)($row['descr'] ?? ''));
+            if ($ref === '') {
+                continue;
+            }
+            if (isset($byRef[$ref])) {
+                self::fail('duplicate system certificate refid ' . $ref);
+            }
+            $byRef[$ref] = $description;
+            if ($description !== '') {
+                $byDescription[$description] ??= [];
+                $byDescription[$description][] = $ref;
+            }
+        }
+        return [
+            'ref_to_description' => $byRef,
+            'description_to_refs' => $byDescription,
+        ];
+    }
+
+    private static function certificateDescription(array $index, string $ref): string
+    {
+        $description = trim((string)($index['ref_to_description'][$ref] ?? ''));
+        if ($description === '') {
+            self::fail('HAProxy frontend references certificate refid without a stable description: ' . $ref);
+        }
+        return $description;
+    }
+
+    private static function certificateRef(array $index, string $description): string
+    {
+        $refs = array_values(array_unique($index['description_to_refs'][$description] ?? []));
+        if ($refs === []) {
+            self::fail('HAProxy frontend certificate description is not installed locally: ' . $description);
+        }
+        if (count($refs) !== 1) {
+            self::fail('HAProxy frontend certificate description is ambiguous locally: ' . $description);
+        }
+        return $refs[0];
+    }
+
+    private static function decodeCertificateDescriptions(string $encoded): array
+    {
+        try {
+            $value = json_decode($encoded, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $error) {
+            self::fail('invalid HAProxy frontend certificate description payload');
+        }
+        if (!is_array($value) || !array_is_list($value)) {
+            self::fail('HAProxy frontend certificate descriptions must be a JSON list');
+        }
+        $out = [];
+        foreach ($value as $description) {
+            if (!is_scalar($description)) {
+                self::fail('HAProxy frontend certificate description must be a string');
+            }
+            $description = trim((string)$description);
+            if ($description === '') {
+                self::fail('HAProxy frontend certificate description must not be empty');
+            }
+            $out[] = $description;
+        }
+        return array_values(array_unique($out));
+    }
+
     private static function payloadData(
         array $row,
         string $type,
         array $serverUuidToName,
-        array $healthcheckUuidToName
+        array $healthcheckUuidToName,
+        array $backendUuidToName,
+        array $certificateIndex
     ): array {
         $unsupported = match ($type) {
             'server' => self::SERVER_UNSUPPORTED_REFERENCES,
             'backend' => self::BACKEND_UNSUPPORTED_REFERENCES,
+            'frontend' => self::FRONTEND_UNSUPPORTED_REFERENCES,
             'healthcheck' => [],
-            default => throw new \InvalidArgumentException('unsupported HAProxy object type'),
+            default => throw new InvalidArgumentException('unsupported HAProxy object type'),
         };
         foreach ($unsupported as $field) {
             if (self::hasValue($row[$field] ?? null)) {
@@ -429,6 +523,52 @@ final class HAProxySync
                 $linkedHealthcheckName = $healthcheckUuidToName[$healthcheckUuid];
             }
             unset($data['linkedServers'], $data['healthCheck']);
+        } elseif ($type === 'frontend') {
+            $backends = self::relationValues($data['defaultBackend'] ?? null);
+            if (count($backends) !== 1) {
+                self::fail('Policy-managed HAProxy frontend must reference exactly one default backend');
+            }
+            $backendUuid = $backends[0];
+            if (!isset($backendUuidToName[$backendUuid])) {
+                self::fail(sprintf(
+                    'HAProxy frontend %s references unknown backend UUID %s',
+                    (string)($row['name'] ?? ''),
+                    $backendUuid
+                ));
+            }
+
+            $certificateDescriptions = [];
+            foreach (self::relationValues($data['ssl_certificates'] ?? null) as $certificateRef) {
+                $certificateDescriptions[] = self::certificateDescription($certificateIndex, $certificateRef);
+            }
+            $certificateDescriptions = array_values(array_unique($certificateDescriptions));
+
+            $defaultCertificateRefs = self::relationValues($data['ssl_default_certificate'] ?? null);
+            if (count($defaultCertificateRefs) > 1) {
+                self::fail('HAProxy frontend default certificate must reference at most one certificate');
+            }
+            $defaultCertificateDescription = $defaultCertificateRefs === []
+                ? ''
+                : self::certificateDescription($certificateIndex, $defaultCertificateRefs[0]);
+
+            if (self::flag($data['ssl_enabled'] ?? null) && $certificateDescriptions === []) {
+                self::fail('TLS-enabled policy-managed HAProxy frontend requires at least one installed certificate');
+            }
+            if ($defaultCertificateDescription !== '' &&
+                !in_array($defaultCertificateDescription, $certificateDescriptions, true)) {
+                self::fail('HAProxy frontend default certificate must also be present in its certificate list');
+            }
+
+            if (is_array($data['bind'] ?? null)) {
+                $data['bind'] = implode(',', self::relationValues($data['bind']));
+            }
+            unset($data['defaultBackend'], $data['ssl_certificates'], $data['ssl_default_certificate']);
+            $data['sync_default_backend_name'] = $backendUuidToName[$backendUuid];
+            $data['sync_ssl_certificate_descriptions'] = json_encode(
+                $certificateDescriptions,
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
+            );
+            $data['sync_ssl_default_certificate_description'] = $defaultCertificateDescription;
         }
 
         foreach ($data as $field => $value) {
@@ -455,9 +595,10 @@ final class HAProxySync
         $assignments = self::assignments($config);
         $inventory = self::inventory($config);
         $objects = $inventory['objects'];
+        $certificateIndex = self::certificateIndexes($config);
 
         foreach ($objects as $key => $object) {
-            if (!isset($assignments[$key])) {
+            if (!isset($assignments[$key]) && $object['object_type'] !== 'frontend') {
                 self::fail(sprintf(
                     'HAProxy %s %s has no mandatory HA policy assignment',
                     $object['object_type'],
@@ -492,7 +633,9 @@ final class HAProxySync
                     $object['row'],
                     $type,
                     $inventory['server_uuid_to_name'],
-                    $inventory['healthcheck_uuid_to_name']
+                    $inventory['healthcheck_uuid_to_name'],
+                    $inventory['backend_uuid_to_name'],
+                    $certificateIndex
                 );
                 if ($type === 'backend') {
                     foreach ($linkedServerNames as $serverName) {
@@ -511,6 +654,15 @@ final class HAProxySync
                             'HAProxy backend %s links healthcheck %s that is not selected for synchronization',
                             $object['object_name'],
                             $linkedHealthcheckName
+                        ));
+                    }
+                } elseif ($type === 'frontend') {
+                    $backendName = trim((string)($data['sync_default_backend_name'] ?? ''));
+                    if ($backendName === '' || !isset($selected[self::objectKey('backend', $backendName)])) {
+                        self::fail(sprintf(
+                            'HAProxy frontend %s default backend %s is not selected for synchronization',
+                            $object['object_name'],
+                            $backendName
                         ));
                     }
                 }
@@ -534,8 +686,16 @@ final class HAProxySync
             ];
         }
 
+        $payloadVersion = self::LEGACY_VERSION;
+        foreach ($payloadObjects as $row) {
+            if ($row['object_type'] === 'frontend') {
+                $payloadVersion = self::VERSION;
+                break;
+            }
+        }
+
         return [
-            'version' => self::VERSION,
+            'version' => $payloadVersion,
             'policies' => $payloadPolicies,
             'objects' => $payloadObjects,
         ];
@@ -550,7 +710,8 @@ final class HAProxySync
             !array_key_exists('objects', $payload)) {
             self::fail('invalid HAProxy sync payload');
         }
-        if ($payload['version'] !== self::VERSION ||
+        $payloadVersion = $payload['version'];
+        if (!in_array($payloadVersion, [self::LEGACY_VERSION, self::VERSION], true) ||
             !is_array($payload['policies']) ||
             !is_array($payload['objects'])) {
             self::fail('unsupported HAProxy sync payload');
@@ -579,6 +740,9 @@ final class HAProxySync
                 self::fail('invalid HAProxy sync object record');
             }
             $type = self::objectType($row['object_type']);
+            if ($payloadVersion === self::LEGACY_VERSION && $type === 'frontend') {
+                self::fail('HAProxy frontend synchronization requires payload version 3');
+            }
             $name = self::objectName($row['object_name']);
             $policyId = trim((string)$row['policy_id']);
             if (!isset($policyMap[$policyId])) {
@@ -604,6 +768,38 @@ final class HAProxySync
             }
             if (($data['name'] ?? '') !== $name) {
                 self::fail(sprintf('HAProxy %s payload name mismatch for %s', $type, $name));
+            }
+
+            if ($type === 'frontend') {
+                foreach (['defaultBackend', 'ssl_certificates', 'ssl_default_certificate'] as $rawRelation) {
+                    if (array_key_exists($rawRelation, $data)) {
+                        self::fail('HAProxy frontend payload must not contain node-local relation ' . $rawRelation);
+                    }
+                }
+                $backendName = self::objectName($data['sync_default_backend_name'] ?? '');
+                $certificateDescriptions = self::decodeCertificateDescriptions(
+                    (string)($data['sync_ssl_certificate_descriptions'] ?? '')
+                );
+                $defaultCertificateDescription = trim((string)($data['sync_ssl_default_certificate_description'] ?? ''));
+                if (self::flag($data['ssl_enabled'] ?? null) && $certificateDescriptions === []) {
+                    self::fail('TLS-enabled HAProxy frontend payload requires certificate descriptions');
+                }
+                if ($defaultCertificateDescription !== '' &&
+                    !in_array($defaultCertificateDescription, $certificateDescriptions, true)) {
+                    self::fail('HAProxy frontend default certificate description must be in the certificate list');
+                }
+                $data['sync_default_backend_name'] = $backendName;
+                $data['sync_ssl_certificate_descriptions'] = json_encode(
+                    $certificateDescriptions,
+                    JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
+                );
+                $data['sync_ssl_default_certificate_description'] = $defaultCertificateDescription;
+            } else {
+                foreach (array_keys($data) as $field) {
+                    if (str_starts_with($field, 'sync_')) {
+                        self::fail('Only HAProxy frontend payloads may contain semantic sync fields');
+                    }
+                }
             }
 
             $linkedServerNames = [];
@@ -632,34 +828,42 @@ final class HAProxySync
             $objects
         ), true);
         foreach ($objects as $row) {
-            if ($row['object_type'] !== 'backend') {
-                continue;
-            }
-            foreach ($row['linked_server_names'] as $serverName) {
-                if (!isset($selected[self::objectKey('server', $serverName)])) {
+            if ($row['object_type'] === 'backend') {
+                foreach ($row['linked_server_names'] as $serverName) {
+                    if (!isset($selected[self::objectKey('server', $serverName)])) {
+                        self::fail(sprintf(
+                            'HAProxy backend %s links server %s missing from payload',
+                            $row['object_name'],
+                            $serverName
+                        ));
+                    }
+                }
+                if ($row['linked_healthcheck_name'] !== '' &&
+                    !isset($selected[self::objectKey('healthcheck', $row['linked_healthcheck_name'])])) {
                     self::fail(sprintf(
-                        'HAProxy backend %s links server %s missing from payload',
+                        'HAProxy backend %s links healthcheck %s missing from payload',
                         $row['object_name'],
-                        $serverName
+                        $row['linked_healthcheck_name']
                     ));
                 }
-            }
-            if ($row['linked_healthcheck_name'] !== '' &&
-                !isset($selected[self::objectKey('healthcheck', $row['linked_healthcheck_name'])])) {
-                self::fail(sprintf(
-                    'HAProxy backend %s links healthcheck %s missing from payload',
-                    $row['object_name'],
-                    $row['linked_healthcheck_name']
-                ));
+            } elseif ($row['object_type'] === 'frontend') {
+                $backendName = $row['data']['sync_default_backend_name'];
+                if (!isset($selected[self::objectKey('backend', $backendName)])) {
+                    self::fail(sprintf(
+                        'HAProxy frontend %s links backend %s missing from payload',
+                        $row['object_name'],
+                        $backendName
+                    ));
+                }
             }
         }
 
         usort($objects, function ($a, $b) {
-            $typeOrder = ['healthcheck' => 0, 'server' => 1, 'backend' => 2];
+            $typeOrder = ['healthcheck' => 0, 'server' => 1, 'backend' => 2, 'frontend' => 3];
             return [$typeOrder[$a['object_type']], $a['object_name']] <=> [$typeOrder[$b['object_type']], $b['object_name']];
         });
         return [
-            'version' => self::VERSION,
+            'version' => $payloadVersion,
             'policies' => $validatedPolicies['policies'],
             'objects' => $objects,
         ];
@@ -688,6 +892,7 @@ final class HAProxySync
             'healthcheck' => 'healthchecks',
             'server' => 'servers',
             'backend' => 'backends',
+            'frontend' => 'frontends',
             default => throw new \InvalidArgumentException('unsupported HAProxy object type'),
         };
         $root[$section] = self::serializeRowsLike($root[$section] ?? '', $type, $rows);
@@ -886,6 +1091,81 @@ final class HAProxySync
             }
         }
         self::setHAProxyRows($next, 'backend', $backendRows);
+
+        $finalBackendUuidByName = [];
+        $finalBackendByUuid = [];
+        foreach (self::haProxyRows($next, 'backend') as $row) {
+            $name = self::objectName($row['name'] ?? '');
+            $uuid = trim((string)($row['@attributes']['uuid'] ?? ''));
+            if ($uuid === '') {
+                self::fail('final HAProxy backend ' . $name . ' is missing its MVC UUID');
+            }
+            $finalBackendUuidByName[$name] = $uuid;
+            $finalBackendByUuid[$uuid] = $name;
+        }
+
+        $certificateIndex = self::certificateIndexes($next);
+        $frontendRows = [];
+        foreach (self::haProxyRows($config, 'frontend') as $row) {
+            $name = self::objectName($row['name'] ?? '');
+            $key = self::objectKey('frontend', $name);
+            if (!isset($managed[$key])) {
+                $frontendRows[] = $row;
+            }
+        }
+        foreach ($desired as $key => $row) {
+            if ($row['object_type'] !== 'frontend') {
+                continue;
+            }
+            $current = isset($managed[$key]) ? ($currentObjects[$key]['row'] ?? null) : null;
+            [$uuid, $id] = self::localIdentity($current, $uuidFactory, $idFactory);
+            $data = $row['data'];
+
+            $backendName = trim((string)($data['sync_default_backend_name'] ?? ''));
+            if (!isset($finalBackendUuidByName[$backendName])) {
+                self::fail(sprintf(
+                    'HAProxy frontend %s cannot resolve local backend %s',
+                    $row['object_name'],
+                    $backendName
+                ));
+            }
+
+            $certificateRefs = [];
+            foreach (self::decodeCertificateDescriptions(
+                (string)($data['sync_ssl_certificate_descriptions'] ?? '')
+            ) as $description) {
+                $certificateRefs[] = self::certificateRef($certificateIndex, $description);
+            }
+            $defaultCertificateDescription = trim(
+                (string)($data['sync_ssl_default_certificate_description'] ?? '')
+            );
+            $defaultCertificateRef = $defaultCertificateDescription === ''
+                ? ''
+                : self::certificateRef($certificateIndex, $defaultCertificateDescription);
+
+            unset(
+                $data['sync_default_backend_name'],
+                $data['sync_ssl_certificate_descriptions'],
+                $data['sync_ssl_default_certificate_description']
+            );
+            $data['defaultBackend'] = $finalBackendUuidByName[$backendName];
+            $data['ssl_certificates'] = implode(',', $certificateRefs);
+            $data['ssl_default_certificate'] = $defaultCertificateRef;
+            $frontendRows[] = ['@attributes' => ['uuid' => $uuid], 'id' => $id] + $data;
+        }
+
+        foreach ($frontendRows as $row) {
+            foreach (self::relationValues($row['defaultBackend'] ?? null) as $backendUuid) {
+                if (!isset($finalBackendByUuid[$backendUuid])) {
+                    self::fail(sprintf(
+                        'final HAProxy frontend %s references backend UUID %s that would be removed',
+                        (string)($row['name'] ?? ''),
+                        $backendUuid
+                    ));
+                }
+            }
+        }
+        self::setHAProxyRows($next, 'frontend', $frontendRows);
 
         // Preserve local-only assignments; prune no-longer-selected synchronized
         // objects. The remaining assignments and policy references are the same
