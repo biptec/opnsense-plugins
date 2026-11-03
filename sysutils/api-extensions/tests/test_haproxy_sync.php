@@ -99,7 +99,10 @@ function sourceConfig(): array
                     'mode' => 'active',
                     'type' => 'static',
                     'linkedResolver' => '',
-                    'ssl' => '0',
+                    'ssl' => '1',
+                    'sslSNI' => 'deneb.svc.sandbox.biptec.net',
+                    'sslVerify' => '1',
+                    'sslVerifyHost' => 'deneb.svc.sandbox.biptec.net',
                     'sslCA' => '',
                     'sslCRL' => '',
                     'sslClientCertificate' => '',
@@ -244,6 +247,10 @@ eq('receiver-id-3', $backendRows[0]['id'], 'receiver generates local backend id'
 eq('receiver-uuid-2', $backendRows[0]['linkedServers'], 'backend remapped to receiver-local server UUID');
 eq('receiver-uuid-1', $backendRows[0]['healthCheck'], 'backend remapped to receiver-local healthcheck UUID');
 eq('192.0.2.44', $serverRows[0]['address'], 'server scalar configuration copied');
+eq('1', $serverRows[0]['ssl'], 'server TLS flag copied');
+eq('deneb.svc.sandbox.biptec.net', $serverRows[0]['sslSNI'], 'server TLS SNI copied');
+eq('1', $serverRows[0]['sslVerify'], 'server TLS chain verification copied');
+eq('deneb.svc.sandbox.biptec.net', $serverRows[0]['sslVerifyHost'], 'server TLS hostname verification copied');
 eq('receiver-independent-frontend', $createdConfig['OPNsense']['HAProxy']['frontends']['frontend']['@attributes']['uuid'], 'frontend baseline untouched');
 eq('endpoint', HAProxySync::assignments($createdConfig)['healthcheck:hc-customer-example']['policy_id'], 'healthcheck assigned by HA policy');
 eq('endpoint', HAProxySync::assignments($createdConfig)['server:origin-customer-example']['policy_id'], 'server assigned by HA policy');
