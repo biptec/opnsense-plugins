@@ -264,6 +264,109 @@ $idempotent = HAProxySync::reconcile(
 );
 eq(false, $idempotent['changed'], 'second sync is idempotent');
 
+// A synchronized TLS frontend carries semantic certificate descriptions, never
+// node-local certificate refids. The receiver must resolve the same description
+// to its own locally-managed certificate, preserving local private-key ownership.
+$frontendSource = $source;
+$frontendSource['cert'] = [[
+    'refid' => 'source-oidc-cert-ref',
+    'descr' => 'oidc-ingress',
+]];
+$frontendSource['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments']['assignment'][] = [
+    '@attributes' => ['uuid' => 'ha-frontend-oidc-ingress'],
+    'object_type' => 'frontend',
+    'object_name' => 'oidc-ingress',
+    'policy_id' => 'endpoint',
+];
+$sharedFrontend = $frontendSource['OPNsense']['HAProxy']['frontends']['frontend'];
+$frontendSource['OPNsense']['HAProxy']['frontends']['frontend'] = [
+    $sharedFrontend,
+    [
+        '@attributes' => ['uuid' => 'source-frontend-uuid'],
+        'id' => 'source-frontend-id',
+        'enabled' => '1',
+        'name' => 'oidc-ingress',
+        'description' => 'OIDC internal TLS ingress',
+        'bind' => '10.0.16.81:443,[2a07:e580:a11:1050::1]:443',
+        'mode' => 'http',
+        'defaultBackend' => 'source-backend-uuid',
+        'ssl_enabled' => '1',
+        'ssl_certificates' => 'source-oidc-cert-ref',
+        'ssl_default_certificate' => 'source-oidc-cert-ref',
+        'linkedActions' => '',
+    ],
+];
+
+$frontendPayload = HAProxySync::buildPayload($frontendSource);
+eq(3, $frontendPayload['version'], 'managed frontend upgrades HAProxy payload to v3');
+eq(4, count($frontendPayload['objects']), 'managed frontend is included after backend');
+$frontendPayloadRow = $frontendPayload['objects'][3];
+eq('frontend', $frontendPayloadRow['object_type'], 'frontend emitted after backend dependencies');
+eq('sni-customer.example', $frontendPayloadRow['data']['sync_default_backend_name'], 'frontend backend relation is semantic');
+eq('["oidc-ingress"]', $frontendPayloadRow['data']['sync_ssl_certificate_descriptions'], 'frontend certificate relation is semantic');
+eq('oidc-ingress', $frontendPayloadRow['data']['sync_ssl_default_certificate_description'], 'frontend default certificate relation is semantic');
+eq(false, array_key_exists('defaultBackend', $frontendPayloadRow['data']), 'source backend UUID stripped from frontend payload');
+eq(false, array_key_exists('ssl_certificates', $frontendPayloadRow['data']), 'source certificate refids stripped from frontend payload');
+eq(false, array_key_exists('ssl_default_certificate', $frontendPayloadRow['data']), 'source default certificate refid stripped from frontend payload');
+
+$frontendReceiver = receiverBase();
+$frontendReceiver['cert'] = [[
+    'refid' => 'receiver-oidc-cert-ref',
+    'descr' => 'oidc-ingress',
+]];
+$frontendCreated = HAProxySync::reconcile(
+    $frontendReceiver,
+    $frontendPayload,
+    nextFactory('frontend-receiver-uuid-'),
+    nextFactory('frontend-receiver-id-')
+);
+eq(true, $frontendCreated['changed'], 'frontend payload changes receiver');
+eq(4, $frontendCreated['count'], 'frontend payload manages four objects');
+$frontendCreatedConfig = $frontendCreated['config'];
+$frontendRows = rows($frontendCreatedConfig['OPNsense']['HAProxy']['frontends'], 'frontend');
+eq(2, count($frontendRows), 'local shared frontend and synchronized TLS frontend coexist');
+$managedFrontend = null;
+foreach ($frontendRows as $frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $managedFrontend = $frontendRow;
+        break;
+    }
+}
+eq(true, is_array($managedFrontend), 'synchronized TLS frontend created');
+eq('frontend-receiver-uuid-3', $managedFrontend['defaultBackend'], 'frontend default backend remapped to receiver-local backend UUID');
+eq('receiver-oidc-cert-ref', $managedFrontend['ssl_certificates'], 'frontend certificate remapped to receiver-local refid');
+eq('receiver-oidc-cert-ref', $managedFrontend['ssl_default_certificate'], 'frontend default certificate remapped to receiver-local refid');
+eq('receiver-independent-frontend', $frontendRows[0]['@attributes']['uuid'], 'unassigned shared frontend remains untouched');
+eq('endpoint', HAProxySync::assignments($frontendCreatedConfig)['frontend:oidc-ingress']['policy_id'], 'frontend receives synchronized HA policy');
+
+$frontendIdempotent = HAProxySync::reconcile(
+    $frontendCreatedConfig,
+    $frontendPayload,
+    fn() => throw new RuntimeException('frontend idempotent UUID factory should not run'),
+    fn() => throw new RuntimeException('frontend idempotent id factory should not run')
+);
+eq(false, $frontendIdempotent['changed'], 'frontend second sync is idempotent');
+
+$reverseFrontendPayload = HAProxySync::buildPayload($frontendCreatedConfig);
+eq(3, $reverseFrontendPayload['version'], 'receiver can produce v3 frontend payload');
+eq('["oidc-ingress"]', $reverseFrontendPayload['objects'][3]['data']['sync_ssl_certificate_descriptions'], 'reverse payload remains certificate-ref independent');
+
+$missingFrontendCert = receiverBase();
+bad(
+    fn() => HAProxySync::reconcile($missingFrontendCert, $frontendPayload),
+    'frontend sync fails closed when receiver-local certificate description is missing'
+);
+
+$ambiguousFrontendCert = receiverBase();
+$ambiguousFrontendCert['cert'] = [
+    ['refid' => 'ambiguous-cert-a', 'descr' => 'oidc-ingress'],
+    ['refid' => 'ambiguous-cert-b', 'descr' => 'oidc-ingress'],
+];
+bad(
+    fn() => HAProxySync::reconcile($ambiguousFrontendCert, $frontendPayload),
+    'frontend sync fails closed when receiver certificate description is ambiguous'
+);
+
 $malformedDirectList = $createdConfig;
 $malformedDirectList['OPNsense']['HAProxy']['servers'] = [$serverRows[0]];
 $malformedDirectList['OPNsense']['HAProxy']['backends'] = [$backendRows[0]];

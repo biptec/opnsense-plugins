@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/ApiExtensions/InterfaceSyncPolicy</mount>
     <description>HA synchronization policies and object assignments</description>
-    <version>1.2.0</version>
+    <version>1.3.0</version>
     <items>
         <sync_marker>
             <enabled type="BooleanField">
@@ -70,12 +70,13 @@
                         <healthcheck>Health Monitor</healthcheck>
                         <server>Server</server>
                         <backend>Backend</backend>
+                        <frontend>Frontend</frontend>
                     </OptionValues>
                 </object_type>
                 <object_name type="TextField">
                     <Required>Y</Required>
                     <Mask>/^([0-9a-zA-Z._\-]){1,255}$/u</Mask>
-                    <ValidationMessage>Use the exact HAProxy health monitor, server or backend name.</ValidationMessage>
+                    <ValidationMessage>Use the exact HAProxy health monitor, server, backend or frontend name.</ValidationMessage>
                 </object_name>
                 <policy_id type="ModelRelationField">
                     <Required>Y</Required>

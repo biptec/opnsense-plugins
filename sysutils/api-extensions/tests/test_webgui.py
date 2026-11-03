@@ -132,24 +132,27 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertIn("getForm('interfaceSyncPolicy')", page_controller)
         self.assertNotIn("interfaceSyncAssignment", page_controller)
 
-    def test_haproxy_policy_is_integrated_into_native_healthchecks_servers_and_backends(self):
+    def test_haproxy_policy_is_integrated_into_native_healthchecks_servers_backends_and_frontends(self):
         haproxy_root = ROOT.parents[1] / "net/haproxy/src/opnsense/mvc/app"
         view = (haproxy_root / "views/OPNsense/HAProxy/index.volt").read_text()
         healthcheck_form = ET.parse(haproxy_root / "controllers/OPNsense/HAProxy/forms/dialogHealthcheck.xml").getroot()
         server_form = ET.parse(haproxy_root / "controllers/OPNsense/HAProxy/forms/dialogServer.xml").getroot()
         backend_form = ET.parse(haproxy_root / "controllers/OPNsense/HAProxy/forms/dialogBackend.xml").getroot()
+        frontend_form = ET.parse(haproxy_root / "controllers/OPNsense/HAProxy/forms/dialogFrontend.xml").getroot()
         controller = (haproxy_root / "controllers/OPNsense/HAProxy/Api/SettingsController.php").read_text()
 
         healthcheck_ids = {node.text for node in healthcheck_form.findall("./field/id")}
         server_ids = {node.text for node in server_form.findall("./field/id")}
         backend_ids = {node.text for node in backend_form.findall("./field/id")}
+        frontend_ids = {node.text for node in frontend_form.findall("./field/id")}
         self.assertIn("healthcheck.ha_policy", healthcheck_ids)
         self.assertIn("server.ha_policy", server_ids)
         self.assertIn("backend.ha_policy", backend_ids)
-        self.assertGreaterEqual(view.count('data-column-id="ha_policy"'), 3)
+        self.assertIn("frontend.ha_policy", frontend_ids)
+        self.assertGreaterEqual(view.count('data-column-id="ha_policy"'), 4)
         self.assertGreaterEqual(view.count("haproxy-ha-policy-status"), 4)
         self.assertIn("/api/api_extensions/haproxy_policy/overview", view)
-        for object_type in ("healthcheck", "server", "backend"):
+        for object_type in ("healthcheck", "server", "backend", "frontend"):
             self.assertIn(f"PolicyAssignmentManager::setHAProxy('{object_type}'", controller)
             self.assertIn(f"PolicyAssignmentManager::removeHAProxy('{object_type}'", controller)
             self.assertIn(f"PolicyAssignmentManager::renameHAProxy('{object_type}'", controller)

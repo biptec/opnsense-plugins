@@ -18,6 +18,13 @@
         <help>Description for this Public Service.</help>
     </field>
     <field>
+        <id>frontend.ha_policy</id>
+        <label>HA Policy</label>
+        <type>dropdown</type>
+        <style>ha_policy_field</style>
+        <help>Select the High Availability policy for this Public Service. The policy determines whether this object is synchronized to the HA peer.</help>
+    </field>
+    <field>
         <id>frontend.bind</id>
         <label>Listen Addresses</label>
         <type>select_multiple</type>

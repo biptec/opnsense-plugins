@@ -88,6 +88,7 @@ class SettingsController extends ApiMutableModelControllerBase
             'healthcheck' => 'healthchecks.healthcheck.',
             'server' => 'servers.server.',
             'backend' => 'backends.backend.',
+            'frontend' => 'frontends.frontend.',
             default => '',
         };
         if ($path === '') {
@@ -150,32 +151,94 @@ class SettingsController extends ApiMutableModelControllerBase
 
     public function getFrontendAction($uuid = null)
     {
-        return $this->getBase('frontend', 'frontends.frontend', $uuid);
+        return $this->enrichPolicyGet($this->getBase('frontend', 'frontends.frontend', $uuid), 'frontend', 'frontend');
     }
 
     public function setFrontendAction($uuid)
     {
-        return $this->setBase('frontend', 'frontends.frontend', $uuid);
+        $oldName = $this->objectName('frontend', $uuid);
+        if (($readonly = $this->readonlyReplica('frontend', $oldName, 'frontend')) !== null) {
+            return $readonly;
+        }
+        if (($validation = $this->validatePolicyPayload('frontend')) !== null) {
+            return $validation;
+        }
+        $payload = $this->request->hasPost('frontend') ? $this->request->getPost('frontend') : [];
+        $newName = is_array($payload) && !empty($payload['name']) ? trim((string)$payload['name']) : $oldName;
+        $policy = $this->policyPayload('frontend');
+        $result = $this->setBase('frontend', 'frontends.frontend', $uuid);
+        if (($result['result'] ?? '') === 'saved' && $this->hasPolicyManager()) {
+            try {
+                if ($policy !== null) {
+                    OPNsenseApiExtensionsPolicyAssignmentManager::setHAProxy('frontend', $newName, $policy, $oldName);
+                } else {
+                    OPNsenseApiExtensionsPolicyAssignmentManager::renameHAProxy('frontend', $oldName, $newName);
+                }
+            } catch (Throwable $error) {
+                return ['result' => 'failed', 'validations' => ['frontend.ha_policy' => $error->getMessage()]];
+            }
+        }
+        return $result;
     }
 
     public function addFrontendAction()
     {
-        return $this->addBase('frontend', 'frontends.frontend');
+        if (($validation = $this->validatePolicyPayload('frontend')) !== null) {
+            return $validation;
+        }
+        $payload = $this->request->hasPost('frontend') ? $this->request->getPost('frontend') : [];
+        $name = is_array($payload) ? trim((string)($payload['name'] ?? '')) : '';
+        $policy = $this->policyPayload('frontend');
+        $result = $this->addBase('frontend', 'frontends.frontend');
+        if (($result['result'] ?? '') === 'saved' && $policy !== null && $this->hasPolicyManager()) {
+            try {
+                OPNsenseApiExtensionsPolicyAssignmentManager::setHAProxy('frontend', $name, $policy);
+            } catch (Throwable $error) {
+                if (!empty($result['uuid'])) {
+                    $this->delBase('frontends.frontend', $result['uuid']);
+                }
+                return ['result' => 'failed', 'validations' => ['frontend.ha_policy' => $error->getMessage()]];
+            }
+        }
+        return $result;
     }
 
     public function delFrontendAction($uuid)
     {
-        return $this->delBase('frontends.frontend', $uuid);
+        $names = [];
+        foreach (explode(',', (string)$uuid) as $itemUuid) {
+            $name = $this->objectName('frontend', trim($itemUuid));
+            if (($readonly = $this->readonlyReplica('frontend', $name, 'frontend')) !== null) {
+                return $readonly;
+            }
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+        $result = $this->delBase('frontends.frontend', $uuid);
+        if (($result['result'] ?? '') === 'deleted' && $this->hasPolicyManager()) {
+            foreach ($names as $name) {
+                OPNsenseApiExtensionsPolicyAssignmentManager::removeHAProxy('frontend', $name);
+            }
+        }
+        return $result;
     }
 
     public function toggleFrontendAction($uuid)
     {
+        $name = $this->objectName('frontend', $uuid);
+        if (($readonly = $this->readonlyReplica('frontend', $name, 'frontend')) !== null) {
+            return $readonly;
+        }
         return $this->toggleBase('frontends.frontend', $uuid);
     }
 
     public function searchFrontendsAction()
     {
-        return $this->searchBase('frontends.frontend', array('enabled', 'name', 'description'), 'name');
+        return $this->enrichPolicySearch(
+            $this->searchBase('frontends.frontend', array('enabled', 'name', 'description'), 'name'),
+            'frontend'
+        );
     }
 
     public function getBackendAction($uuid = null)
