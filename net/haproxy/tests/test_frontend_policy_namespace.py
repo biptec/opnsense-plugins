@@ -16,6 +16,7 @@ class FrontendPolicyNamespaceContractTests(unittest.TestCase):
 
         self.assertNotIn("OPNsenseApiExtensionsPolicyAssignmentManager::", frontend)
         self.assertNotIn("catch (Throwable $error)", frontend)
+        self.assertNotIn("readonlyReplica(", frontend)
         self.assertIn(
             "\\OPNsense\\ApiExtensions\\PolicyAssignmentManager::setHAProxy('frontend'",
             frontend,

@@ -157,9 +157,6 @@ class SettingsController extends ApiMutableModelControllerBase
     public function setFrontendAction($uuid)
     {
         $oldName = $this->objectName('frontend', $uuid);
-        if (($readonly = $this->readonlyReplica('frontend', $oldName, 'frontend')) !== null) {
-            return $readonly;
-        }
         if (($validation = $this->validatePolicyPayload('frontend')) !== null) {
             return $validation;
         }
@@ -208,9 +205,6 @@ class SettingsController extends ApiMutableModelControllerBase
         $names = [];
         foreach (explode(',', (string)$uuid) as $itemUuid) {
             $name = $this->objectName('frontend', trim($itemUuid));
-            if (($readonly = $this->readonlyReplica('frontend', $name, 'frontend')) !== null) {
-                return $readonly;
-            }
             if ($name !== '') {
                 $names[] = $name;
             }
@@ -226,10 +220,6 @@ class SettingsController extends ApiMutableModelControllerBase
 
     public function toggleFrontendAction($uuid)
     {
-        $name = $this->objectName('frontend', $uuid);
-        if (($readonly = $this->readonlyReplica('frontend', $name, 'frontend')) !== null) {
-            return $readonly;
-        }
         return $this->toggleBase('frontends.frontend', $uuid);
     }
 
