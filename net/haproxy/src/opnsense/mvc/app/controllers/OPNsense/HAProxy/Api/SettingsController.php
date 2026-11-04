@@ -170,11 +170,11 @@ class SettingsController extends ApiMutableModelControllerBase
         if (($result['result'] ?? '') === 'saved' && $this->hasPolicyManager()) {
             try {
                 if ($policy !== null) {
-                    OPNsenseApiExtensionsPolicyAssignmentManager::setHAProxy('frontend', $newName, $policy, $oldName);
+                    \OPNsense\ApiExtensions\PolicyAssignmentManager::setHAProxy('frontend', $newName, $policy, $oldName);
                 } else {
-                    OPNsenseApiExtensionsPolicyAssignmentManager::renameHAProxy('frontend', $oldName, $newName);
+                    \OPNsense\ApiExtensions\PolicyAssignmentManager::renameHAProxy('frontend', $oldName, $newName);
                 }
-            } catch (Throwable $error) {
+            } catch (\Throwable $error) {
                 return ['result' => 'failed', 'validations' => ['frontend.ha_policy' => $error->getMessage()]];
             }
         }
@@ -192,8 +192,8 @@ class SettingsController extends ApiMutableModelControllerBase
         $result = $this->addBase('frontend', 'frontends.frontend');
         if (($result['result'] ?? '') === 'saved' && $policy !== null && $this->hasPolicyManager()) {
             try {
-                OPNsenseApiExtensionsPolicyAssignmentManager::setHAProxy('frontend', $name, $policy);
-            } catch (Throwable $error) {
+                \OPNsense\ApiExtensions\PolicyAssignmentManager::setHAProxy('frontend', $name, $policy);
+            } catch (\Throwable $error) {
                 if (!empty($result['uuid'])) {
                     $this->delBase('frontends.frontend', $result['uuid']);
                 }
@@ -218,7 +218,7 @@ class SettingsController extends ApiMutableModelControllerBase
         $result = $this->delBase('frontends.frontend', $uuid);
         if (($result['result'] ?? '') === 'deleted' && $this->hasPolicyManager()) {
             foreach ($names as $name) {
-                OPNsenseApiExtensionsPolicyAssignmentManager::removeHAProxy('frontend', $name);
+                \OPNsense\ApiExtensions\PolicyAssignmentManager::removeHAProxy('frontend', $name);
             }
         }
         return $result;
