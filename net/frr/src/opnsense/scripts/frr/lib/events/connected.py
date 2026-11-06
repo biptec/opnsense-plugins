@@ -319,7 +319,24 @@ class ConnectedCarpReconciler:
                 continue
             family, network = key
             current = current_route(network, family)
-            if current is not None and current.get("gateway"):
+            if (
+                current is not None
+                and current.get("gateway")
+                and current.get("interface")
+                and current["interface"] != master["interface"]
+            ):
+                # State loss alone is not enough ownership proof. Only remove a
+                # gateway route when it exactly matches FRR's current OSPF peer
+                # path for this CARP prefix. Unknown/static routes fail closed
+                # and remain untouched.
+                learned = self._ospf_route(network, family)
+                if (
+                    learned is None
+                    or learned.get("gateway") != current.get("gateway")
+                    or learned.get("interface") != current.get("interface")
+                    or learned.get("interface") == master["interface"]
+                ):
+                    continue
                 stale = dict(current)
                 result = self._delete_route(network, family, current["gateway"])
                 if result.returncode != 0:
