@@ -196,6 +196,29 @@ Destination        Gateway            Flags   Nhop#    Mtu            Netif Expi
             self.assertEqual(sum(item["action"] == "restore-connected" for item in actions), 2)
             self.assertEqual(CONNECTED.load_state(state), [])
 
+    def test_master_recovers_stale_peer_fallback_without_state_file(self):
+        commands = FakeCommands()
+        commands.routes[(4, "10.250.99.0/30")] = {"gateway": "10.250.99.5", "interface": "vlan3991"}
+        commands.routes[(6, "fd00:3990::/64")] = {"gateway": "fe80::1%vlan3991", "interface": "vlan3991"}
+        with tempfile.TemporaryDirectory() as td:
+            state = str(Path(td) / "state.json")
+            actions = CONNECTED.ConnectedCarpReconciler(commands, state).reconcile(IFCONFIG_MASTER)
+            self.assertEqual(commands.routes[(4, "10.250.99.0/30")], {"gateway": "", "interface": "vlan3990"})
+            self.assertEqual(commands.routes[(6, "fd00:3990::/64")], {"gateway": "", "interface": "vlan3990"})
+            self.assertEqual(sum(item["action"] == "delete-stale-fallback" for item in actions), 2)
+            self.assertEqual(sum(item["action"] == "restore-connected" for item in actions), 2)
+            self.assertEqual(CONNECTED.load_state(state), [])
+
+    def test_master_restores_missing_connected_route_without_state_file(self):
+        commands = FakeCommands()
+        commands.routes.clear()
+        with tempfile.TemporaryDirectory() as td:
+            state = str(Path(td) / "state.json")
+            actions = CONNECTED.ConnectedCarpReconciler(commands, state).reconcile(IFCONFIG_MASTER)
+            self.assertEqual(commands.routes[(4, "10.250.99.0/30")], {"gateway": "", "interface": "vlan3990"})
+            self.assertEqual(commands.routes[(6, "fd00:3990::/64")], {"gateway": "", "interface": "vlan3990"})
+            self.assertEqual(sum(item["action"] == "restore-connected" for item in actions), 2)
+
     def test_ospf_withdrawal_removes_only_managed_fallback(self):
         commands = FakeCommands()
         with tempfile.TemporaryDirectory() as td:
