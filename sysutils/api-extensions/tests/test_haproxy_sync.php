@@ -347,6 +347,70 @@ $frontendIdempotent = HAProxySync::reconcile(
 );
 eq(false, $frontendIdempotent['changed'], 'frontend second sync is idempotent');
 
+// A shared fail-closed internal frontend intentionally has no default backend.
+// It is accepted only with the exact dynamic SNI dispatch contract used by
+// Core Router, and the receiver must preserve the empty relation.
+$dynamicFrontendSource = $frontendSource;
+foreach ($dynamicFrontendSource['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['defaultBackend'] = '';
+        $frontendRow['customOptions'] = 'use_backend nc-sni-%[ssl_fc_sni,lower]';
+    }
+}
+unset($frontendRow);
+$dynamicFrontendPayload = HAProxySync::buildPayload($dynamicFrontendSource);
+eq('', $dynamicFrontendPayload['objects'][3]['data']['sync_default_backend_name'], 'dynamic frontend carries no default backend');
+eq(
+    'use_backend nc-sni-%[ssl_fc_sni,lower]',
+    $dynamicFrontendPayload['objects'][3]['data']['customOptions'],
+    'dynamic frontend dispatch is preserved'
+);
+$dynamicFrontendReceiver = receiverBase();
+$dynamicFrontendReceiver['cert'] = [[
+    'refid' => 'receiver-oidc-cert-ref',
+    'descr' => 'oidc-ingress',
+]];
+$dynamicFrontendCreated = HAProxySync::reconcile(
+    $dynamicFrontendReceiver,
+    $dynamicFrontendPayload,
+    nextFactory('dynamic-frontend-receiver-uuid-'),
+    nextFactory('dynamic-frontend-receiver-id-')
+);
+$dynamicFrontendRows = rows($dynamicFrontendCreated['config']['OPNsense']['HAProxy']['frontends'], 'frontend');
+$dynamicManagedFrontend = null;
+foreach ($dynamicFrontendRows as $frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $dynamicManagedFrontend = $frontendRow;
+        break;
+    }
+}
+eq(true, is_array($dynamicManagedFrontend), 'dynamic synchronized frontend created');
+eq('', $dynamicManagedFrontend['defaultBackend'], 'dynamic frontend remains fail-closed without default backend');
+eq(
+    'use_backend nc-sni-%[ssl_fc_sni,lower]',
+    $dynamicManagedFrontend['customOptions'],
+    'dynamic frontend keeps exact SNI dispatch on receiver'
+);
+$dynamicFrontendIdempotent = HAProxySync::reconcile(
+    $dynamicFrontendCreated['config'],
+    $dynamicFrontendPayload,
+    fn() => throw new RuntimeException('dynamic frontend idempotent UUID factory should not run'),
+    fn() => throw new RuntimeException('dynamic frontend idempotent id factory should not run')
+);
+eq(false, $dynamicFrontendIdempotent['changed'], 'dynamic frontend second sync is idempotent');
+
+$invalidNoDefaultFrontend = $dynamicFrontendSource;
+foreach ($invalidNoDefaultFrontend['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['customOptions'] = '';
+    }
+}
+unset($frontendRow);
+bad(
+    fn() => HAProxySync::buildPayload($invalidNoDefaultFrontend),
+    'frontend without default backend and exact dynamic SNI dispatch is rejected'
+);
+
 $reverseFrontendPayload = HAProxySync::buildPayload($frontendCreatedConfig);
 eq(3, $reverseFrontendPayload['version'], 'receiver can produce v3 frontend payload');
 eq('["oidc-ingress"]', $reverseFrontendPayload['objects'][3]['data']['sync_ssl_certificate_descriptions'], 'reverse payload remains certificate-ref independent');

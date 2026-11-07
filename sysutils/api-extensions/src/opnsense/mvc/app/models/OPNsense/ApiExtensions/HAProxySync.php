@@ -11,6 +11,7 @@ final class HAProxySync
 
     private const OBJECT_TYPES = ['healthcheck', 'server', 'backend', 'frontend'];
     private const OBJECT_NAME = '/^[0-9A-Za-z._-]{1,255}$/D';
+    private const DYNAMIC_SNI_DISPATCH = 'use_backend nc-sni-%[ssl_fc_sni,lower]';
     private const SERVER_UNSUPPORTED_REFERENCES = [
         'linkedResolver',
         'sslCA',
@@ -393,6 +394,11 @@ final class HAProxySync
         return trim((string)$value) !== '';
     }
 
+    private static function isDynamicSniFrontend(array $data): bool
+    {
+        return trim((string)($data['customOptions'] ?? '')) === self::DYNAMIC_SNI_DISPATCH;
+    }
+
     private static function certificateIndexes(array $config): array
     {
         $byRef = [];
@@ -525,16 +531,22 @@ final class HAProxySync
             unset($data['linkedServers'], $data['healthCheck']);
         } elseif ($type === 'frontend') {
             $backends = self::relationValues($data['defaultBackend'] ?? null);
-            if (count($backends) !== 1) {
-                self::fail('Policy-managed HAProxy frontend must reference exactly one default backend');
+            if (count($backends) > 1) {
+                self::fail('Policy-managed HAProxy frontend must reference at most one default backend');
             }
-            $backendUuid = $backends[0];
-            if (!isset($backendUuidToName[$backendUuid])) {
-                self::fail(sprintf(
-                    'HAProxy frontend %s references unknown backend UUID %s',
-                    (string)($row['name'] ?? ''),
-                    $backendUuid
-                ));
+            $backendName = '';
+            if ($backends !== []) {
+                $backendUuid = $backends[0];
+                if (!isset($backendUuidToName[$backendUuid])) {
+                    self::fail(sprintf(
+                        'HAProxy frontend %s references unknown backend UUID %s',
+                        (string)($row['name'] ?? ''),
+                        $backendUuid
+                    ));
+                }
+                $backendName = $backendUuidToName[$backendUuid];
+            } elseif (!self::isDynamicSniFrontend($data)) {
+                self::fail('Policy-managed HAProxy frontend without a default backend must use the supported dynamic SNI dispatch');
             }
 
             $certificateDescriptions = [];
@@ -563,7 +575,7 @@ final class HAProxySync
                 $data['bind'] = implode(',', self::relationValues($data['bind']));
             }
             unset($data['defaultBackend'], $data['ssl_certificates'], $data['ssl_default_certificate']);
-            $data['sync_default_backend_name'] = $backendUuidToName[$backendUuid];
+            $data['sync_default_backend_name'] = $backendName;
             $data['sync_ssl_certificate_descriptions'] = json_encode(
                 $certificateDescriptions,
                 JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
@@ -658,7 +670,7 @@ final class HAProxySync
                     }
                 } elseif ($type === 'frontend') {
                     $backendName = trim((string)($data['sync_default_backend_name'] ?? ''));
-                    if ($backendName === '' || !isset($selected[self::objectKey('backend', $backendName)])) {
+                    if ($backendName !== '' && !isset($selected[self::objectKey('backend', $backendName)])) {
                         self::fail(sprintf(
                             'HAProxy frontend %s default backend %s is not selected for synchronization',
                             $object['object_name'],
@@ -776,7 +788,12 @@ final class HAProxySync
                         self::fail('HAProxy frontend payload must not contain node-local relation ' . $rawRelation);
                     }
                 }
-                $backendName = self::objectName($data['sync_default_backend_name'] ?? '');
+                $backendName = trim((string)($data['sync_default_backend_name'] ?? ''));
+                if ($backendName !== '') {
+                    $backendName = self::objectName($backendName);
+                } elseif (!self::isDynamicSniFrontend($data)) {
+                    self::fail('HAProxy frontend without a default backend must use the supported dynamic SNI dispatch');
+                }
                 $certificateDescriptions = self::decodeCertificateDescriptions(
                     (string)($data['sync_ssl_certificate_descriptions'] ?? '')
                 );
@@ -848,7 +865,7 @@ final class HAProxySync
                 }
             } elseif ($row['object_type'] === 'frontend') {
                 $backendName = $row['data']['sync_default_backend_name'];
-                if (!isset($selected[self::objectKey('backend', $backendName)])) {
+                if ($backendName !== '' && !isset($selected[self::objectKey('backend', $backendName)])) {
                     self::fail(sprintf(
                         'HAProxy frontend %s links backend %s missing from payload',
                         $row['object_name'],
@@ -1122,12 +1139,18 @@ final class HAProxySync
             $data = $row['data'];
 
             $backendName = trim((string)($data['sync_default_backend_name'] ?? ''));
-            if (!isset($finalBackendUuidByName[$backendName])) {
-                self::fail(sprintf(
-                    'HAProxy frontend %s cannot resolve local backend %s',
-                    $row['object_name'],
-                    $backendName
-                ));
+            $defaultBackendUuid = '';
+            if ($backendName !== '') {
+                if (!isset($finalBackendUuidByName[$backendName])) {
+                    self::fail(sprintf(
+                        'HAProxy frontend %s cannot resolve local backend %s',
+                        $row['object_name'],
+                        $backendName
+                    ));
+                }
+                $defaultBackendUuid = $finalBackendUuidByName[$backendName];
+            } elseif (!self::isDynamicSniFrontend($data)) {
+                self::fail('HAProxy frontend without a default backend must use the supported dynamic SNI dispatch');
             }
 
             $certificateRefs = [];
@@ -1148,7 +1171,7 @@ final class HAProxySync
                 $data['sync_ssl_certificate_descriptions'],
                 $data['sync_ssl_default_certificate_description']
             );
-            $data['defaultBackend'] = $finalBackendUuidByName[$backendName];
+            $data['defaultBackend'] = $defaultBackendUuid;
             $data['ssl_certificates'] = implode(',', $certificateRefs);
             $data['ssl_default_certificate'] = $defaultCertificateRef;
             $frontendRows[] = ['@attributes' => ['uuid' => $uuid], 'id' => $id] + $data;
