@@ -11,7 +11,9 @@ final class HAProxySync
 
     private const OBJECT_TYPES = ['healthcheck', 'server', 'backend', 'frontend'];
     private const OBJECT_NAME = '/^[0-9A-Za-z._-]{1,255}$/D';
+    private const HOST_NAME = '/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/D';
     private const DYNAMIC_SNI_DISPATCH = 'use_backend nc-sni-%[ssl_fc_sni,lower]';
+    private const DYNAMIC_HOST_DISPATCH = '/^use_backend ([0-9A-Za-z._-]{1,255}) if \\{ hdr\\(host\\),lower,field\\(1,:\\) -m str ([a-z0-9.-]{1,253}) \\}$/D';
     private const SERVER_UNSUPPORTED_REFERENCES = [
         'linkedResolver',
         'sslCA',
@@ -394,9 +396,46 @@ final class HAProxySync
         return trim((string)$value) !== '';
     }
 
-    private static function isDynamicSniFrontend(array $data): bool
+    /**
+     * Return the semantic backend names referenced by a supported fail-closed
+     * dynamic frontend. An empty list denotes the legacy SNI-derived dispatch;
+     * null means the custom options are not a supported dynamic contract.
+     *
+     * Host dispatch is deliberately strict: each line may only select one
+     * named backend from the normalized HTTP Host value. This keeps HTTP/2
+     * connection coalescing safe without turning synchronized customOptions
+     * into an arbitrary HAProxy configuration channel.
+     */
+    private static function dynamicFrontendBackendNames(array $data): ?array
     {
-        return trim((string)($data['customOptions'] ?? '')) === self::DYNAMIC_SNI_DISPATCH;
+        $customOptions = trim((string)($data['customOptions'] ?? ''));
+        if ($customOptions === self::DYNAMIC_SNI_DISPATCH) {
+            return [];
+        }
+        if ($customOptions === '') {
+            return null;
+        }
+
+        $backends = [];
+        $hosts = [];
+        foreach (preg_split('/\\R/', $customOptions) ?: [] as $line) {
+            if ($line === '' || !preg_match(self::DYNAMIC_HOST_DISPATCH, $line, $matches)) {
+                return null;
+            }
+            $backend = self::objectName($matches[1]);
+            $host = $matches[2];
+            if (!preg_match(self::HOST_NAME, $host) || isset($hosts[$host])) {
+                return null;
+            }
+            $hosts[$host] = true;
+            $backends[$backend] = true;
+        }
+        return $hosts === [] ? null : array_keys($backends);
+    }
+
+    private static function isDynamicFrontend(array $data): bool
+    {
+        return self::dynamicFrontendBackendNames($data) !== null;
     }
 
     private static function certificateIndexes(array $config): array
@@ -545,8 +584,8 @@ final class HAProxySync
                     ));
                 }
                 $backendName = $backendUuidToName[$backendUuid];
-            } elseif (!self::isDynamicSniFrontend($data)) {
-                self::fail('Policy-managed HAProxy frontend without a default backend must use the supported dynamic SNI dispatch');
+            } elseif (!self::isDynamicFrontend($data)) {
+                self::fail('Policy-managed HAProxy frontend without a default backend must use a supported fail-closed dynamic dispatch');
             }
 
             $certificateDescriptions = [];
@@ -677,6 +716,15 @@ final class HAProxySync
                             $backendName
                         ));
                     }
+                    foreach (self::dynamicFrontendBackendNames($data) ?? [] as $dispatchBackendName) {
+                        if (!isset($selected[self::objectKey('backend', $dispatchBackendName)])) {
+                            self::fail(sprintf(
+                                'HAProxy frontend %s dynamic backend %s is not selected for synchronization',
+                                $object['object_name'],
+                                $dispatchBackendName
+                            ));
+                        }
+                    }
                 }
                 $payloadObjects[] = [
                     'object_type' => $type,
@@ -791,8 +839,8 @@ final class HAProxySync
                 $backendName = trim((string)($data['sync_default_backend_name'] ?? ''));
                 if ($backendName !== '') {
                     $backendName = self::objectName($backendName);
-                } elseif (!self::isDynamicSniFrontend($data)) {
-                    self::fail('HAProxy frontend without a default backend must use the supported dynamic SNI dispatch');
+                } elseif (!self::isDynamicFrontend($data)) {
+                    self::fail('HAProxy frontend without a default backend must use a supported fail-closed dynamic dispatch');
                 }
                 $certificateDescriptions = self::decodeCertificateDescriptions(
                     (string)($data['sync_ssl_certificate_descriptions'] ?? '')
@@ -871,6 +919,15 @@ final class HAProxySync
                         $row['object_name'],
                         $backendName
                     ));
+                }
+                foreach (self::dynamicFrontendBackendNames($row['data']) ?? [] as $dispatchBackendName) {
+                    if (!isset($selected[self::objectKey('backend', $dispatchBackendName)])) {
+                        self::fail(sprintf(
+                            'HAProxy frontend %s dynamic backend %s missing from payload',
+                            $row['object_name'],
+                            $dispatchBackendName
+                        ));
+                    }
                 }
             }
         }
@@ -1149,8 +1206,8 @@ final class HAProxySync
                     ));
                 }
                 $defaultBackendUuid = $finalBackendUuidByName[$backendName];
-            } elseif (!self::isDynamicSniFrontend($data)) {
-                self::fail('HAProxy frontend without a default backend must use the supported dynamic SNI dispatch');
+            } elseif (!self::isDynamicFrontend($data)) {
+                self::fail('HAProxy frontend without a default backend must use a supported fail-closed dynamic dispatch');
             }
 
             $certificateRefs = [];
