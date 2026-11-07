@@ -289,7 +289,11 @@ class ConnectedCarpReconciler:
                 "vhid": item["vhid"],
             }
 
-        kernel_families = {family for family, _ in set(previous) | set(desired)}
+        # MASTER prefixes are authoritative local networks. Include them in the
+        # kernel snapshot even when the volatile ownership state was lost, so a
+        # stale peer fallback can be detected and repaired after restart/state
+        # loss instead of surviving indefinitely.
+        kernel_families = {family for family, _ in set(previous) | set(desired) | set(grouped)}
         kernel_routes, kernel_loaded = self._kernel_snapshots(kernel_families)
 
         def current_route(prefix, family):
@@ -303,6 +307,60 @@ class ConnectedCarpReconciler:
 
         actions = []
         retained = {}
+
+        # A CARP MASTER must always own a direct connected path to its own
+        # prefix. The normal BACKUP->MASTER transition removes a tracked
+        # fallback through `previous`, but /var/run state is intentionally
+        # volatile and can be lost while the kernel route remains. Self-heal
+        # that inconsistent state without relying on ownership history.
+        for key, members in grouped.items():
+            master = next((item for item in members if item["state"] == "master"), None)
+            if master is None:
+                continue
+            family, network = key
+            current = current_route(network, family)
+            if (
+                current is not None
+                and current.get("gateway")
+                and current.get("interface")
+                and current["interface"] != master["interface"]
+            ):
+                # State loss alone is not enough ownership proof. Only remove a
+                # gateway route when it exactly matches FRR's current OSPF peer
+                # path for this CARP prefix. Unknown/static routes fail closed
+                # and remain untouched.
+                learned = self._ospf_route(network, family)
+                if (
+                    learned is None
+                    or learned.get("gateway") != current.get("gateway")
+                    or learned.get("interface") != current.get("interface")
+                    or learned.get("interface") == master["interface"]
+                ):
+                    continue
+                stale = dict(current)
+                result = self._delete_route(network, family, current["gateway"])
+                if result.returncode != 0:
+                    continue
+                kernel_routes.pop((family, network), None)
+                actions.append({
+                    "action": "delete-stale-fallback",
+                    "family": family,
+                    "network": network,
+                    "gateway": stale["gateway"],
+                    "carp_interface": master["interface"],
+                })
+                current = current_route(network, family)
+            if current is None:
+                result = self._restore_connected_route(network, family, master["interface"])
+                if result.returncode != 0:
+                    continue
+                kernel_routes[(family, network)] = {"gateway": "", "interface": master["interface"]}
+                actions.append({
+                    "action": "restore-connected",
+                    "family": family,
+                    "network": network,
+                    "carp_interface": master["interface"],
+                })
 
         # First retire routes that are no longer desired or whose OSPF next hop
         # changed. Failed deletes remain tracked so a later CARP/FRR event can
