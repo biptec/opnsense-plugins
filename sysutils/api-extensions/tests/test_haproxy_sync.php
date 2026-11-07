@@ -399,6 +399,84 @@ $dynamicFrontendIdempotent = HAProxySync::reconcile(
 );
 eq(false, $dynamicFrontendIdempotent['changed'], 'dynamic frontend second sync is idempotent');
 
+// HTTP/2 clients may coalesce multiple certificate-covered hostnames onto one
+// TLS connection. Per-request Host dispatch must therefore be accepted as a
+// strict fail-closed dynamic contract and preserve the rules verbatim.
+$hostFrontendSource = $frontendSource;
+$hostDispatch = implode("\n", [
+    'use_backend sni-customer.example if { hdr(host),lower,field(1,:) -m str id.example.invalid }',
+    'use_backend sni-customer.example if { hdr(host),lower,field(1,:) -m str dc.example.invalid }',
+]);
+foreach ($hostFrontendSource['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['defaultBackend'] = '';
+        $frontendRow['customOptions'] = $hostDispatch;
+    }
+}
+unset($frontendRow);
+$hostFrontendPayload = HAProxySync::buildPayload($hostFrontendSource);
+eq('', $hostFrontendPayload['objects'][3]['data']['sync_default_backend_name'], 'Host frontend carries no default backend');
+eq($hostDispatch, $hostFrontendPayload['objects'][3]['data']['customOptions'], 'Host dispatch is preserved in payload');
+$hostFrontendReceiver = receiverBase();
+$hostFrontendReceiver['cert'] = [[
+    'refid' => 'receiver-oidc-cert-ref',
+    'descr' => 'oidc-ingress',
+]];
+$hostFrontendCreated = HAProxySync::reconcile(
+    $hostFrontendReceiver,
+    $hostFrontendPayload,
+    nextFactory('host-frontend-receiver-uuid-'),
+    nextFactory('host-frontend-receiver-id-')
+);
+$hostFrontendRows = rows($hostFrontendCreated['config']['OPNsense']['HAProxy']['frontends'], 'frontend');
+$hostManagedFrontend = null;
+foreach ($hostFrontendRows as $frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $hostManagedFrontend = $frontendRow;
+        break;
+    }
+}
+eq(true, is_array($hostManagedFrontend), 'Host-dispatched synchronized frontend created');
+eq('', $hostManagedFrontend['defaultBackend'], 'Host-dispatched frontend stays fail-closed without default backend');
+eq($hostDispatch, $hostManagedFrontend['customOptions'], 'Host dispatch survives receiver reconciliation verbatim');
+$hostFrontendIdempotent = HAProxySync::reconcile(
+    $hostFrontendCreated['config'],
+    $hostFrontendPayload,
+    fn() => throw new RuntimeException('Host frontend idempotent UUID factory should not run'),
+    fn() => throw new RuntimeException('Host frontend idempotent id factory should not run')
+);
+eq(false, $hostFrontendIdempotent['changed'], 'Host-dispatched frontend second sync is idempotent');
+
+$missingHostBackend = $hostFrontendSource;
+foreach ($missingHostBackend['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['customOptions'] = 'use_backend missing-backend if { hdr(host),lower,field(1,:) -m str id.example.invalid }';
+    }
+}
+unset($frontendRow);
+bad(fn() => HAProxySync::buildPayload($missingHostBackend), 'Host dispatch backend must be selected for synchronization');
+
+$duplicateHostDispatch = $hostFrontendSource;
+foreach ($duplicateHostDispatch['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['customOptions'] = implode("\n", [
+            'use_backend sni-customer.example if { hdr(host),lower,field(1,:) -m str id.example.invalid }',
+            'use_backend sni-customer.example if { hdr(host),lower,field(1,:) -m str id.example.invalid }',
+        ]);
+    }
+}
+unset($frontendRow);
+bad(fn() => HAProxySync::buildPayload($duplicateHostDispatch), 'duplicate Host dispatch conditions are rejected');
+
+$unsafeHostDispatch = $hostFrontendSource;
+foreach ($unsafeHostDispatch['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['customOptions'] = 'use_backend sni-customer.example if { hdr(host) -m end example.invalid }';
+    }
+}
+unset($frontendRow);
+bad(fn() => HAProxySync::buildPayload($unsafeHostDispatch), 'arbitrary HAProxy custom options are rejected for fail-closed frontend');
+
 $invalidNoDefaultFrontend = $dynamicFrontendSource;
 foreach ($invalidNoDefaultFrontend['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
     if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
@@ -408,7 +486,7 @@ foreach ($invalidNoDefaultFrontend['OPNsense']['HAProxy']['frontends']['frontend
 unset($frontendRow);
 bad(
     fn() => HAProxySync::buildPayload($invalidNoDefaultFrontend),
-    'frontend without default backend and exact dynamic SNI dispatch is rejected'
+    'frontend without default backend and supported fail-closed dynamic dispatch is rejected'
 );
 
 $reverseFrontendPayload = HAProxySync::buildPayload($frontendCreatedConfig);
