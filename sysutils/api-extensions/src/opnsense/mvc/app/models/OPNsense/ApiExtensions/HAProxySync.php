@@ -13,6 +13,7 @@ final class HAProxySync
     private const OBJECT_NAME = '/^[0-9A-Za-z._-]{1,255}$/D';
     private const HOST_NAME = '/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/D';
     private const DYNAMIC_SNI_DISPATCH = 'use_backend nc-sni-%[ssl_fc_sni,lower]';
+    private const DYNAMIC_HOST_DERIVED_DISPATCH = 'use_backend nc-sni-%[req.hdr(host),lower,field(1,:)]';
     private const DYNAMIC_HOST_DISPATCH = '/^use_backend ([0-9A-Za-z._-]{1,255}) if \\{ hdr\\(host\\),lower,field\\(1,:\\) -m str ([a-z0-9.-]{1,253}) \\}$/D';
     private const SERVER_UNSUPPORTED_REFERENCES = [
         'linkedResolver',
@@ -398,18 +399,22 @@ final class HAProxySync
 
     /**
      * Return the semantic backend names referenced by a supported fail-closed
-     * dynamic frontend. An empty list denotes the legacy SNI-derived dispatch;
+     * dynamic frontend. An empty list denotes a backend selected entirely from
+     * the runtime request (legacy SNI or generic normalized Host), so there are
+     * zero explicit backend dependencies in the synchronized frontend payload.
      * null means the custom options are not a supported dynamic contract.
      *
-     * Host dispatch is deliberately strict: each line may only select one
-     * named backend from the normalized HTTP Host value. This keeps HTTP/2
-     * connection coalescing safe without turning synchronized customOptions
-     * into an arbitrary HAProxy configuration channel.
+     * Host dispatch is deliberately strict. The generic rule must match the
+     * exact approved expression, while legacy explicit Host rules may only
+     * select one named backend from the normalized HTTP Host value. This keeps
+     * HTTP/2 connection coalescing safe without turning synchronized
+     * customOptions into an arbitrary HAProxy configuration channel.
      */
     private static function dynamicFrontendBackendNames(array $data): ?array
     {
         $customOptions = trim((string)($data['customOptions'] ?? ''));
-        if ($customOptions === self::DYNAMIC_SNI_DISPATCH) {
+        if ($customOptions === self::DYNAMIC_SNI_DISPATCH ||
+            $customOptions === self::DYNAMIC_HOST_DERIVED_DISPATCH) {
             return [];
         }
         if ($customOptions === '') {
