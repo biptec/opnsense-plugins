@@ -399,6 +399,78 @@ $dynamicFrontendIdempotent = HAProxySync::reconcile(
 );
 eq(false, $dynamicFrontendIdempotent['changed'], 'dynamic frontend second sync is idempotent');
 
+// The generic per-request Host-derived dispatch intentionally has zero explicit
+// backend dependencies. It must synchronize safely even when this payload owns
+// only the shared frontend and the selected nc-sni-* backend is owned by a
+// different Terraform consumer state.
+$genericHostFrontendSource = $frontendSource;
+$genericHostFrontendSource['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments']['assignment'] = [
+    [
+        '@attributes' => ['uuid' => 'ha-frontend-oidc-ingress'],
+        'object_type' => 'frontend',
+        'object_name' => 'oidc-ingress',
+        'policy_id' => 'endpoint',
+    ],
+];
+$genericHostFrontendSource['OPNsense']['HAProxy']['healthchecks'] = '';
+$genericHostFrontendSource['OPNsense']['HAProxy']['servers'] = '';
+$genericHostFrontendSource['OPNsense']['HAProxy']['backends'] = '';
+$genericHostDispatch = 'use_backend nc-sni-%[req.hdr(host),lower,field(1,:)]';
+foreach ($genericHostFrontendSource['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['defaultBackend'] = '';
+        $frontendRow['customOptions'] = $genericHostDispatch;
+    }
+}
+unset($frontendRow);
+$genericHostFrontendPayload = HAProxySync::buildPayload($genericHostFrontendSource);
+eq(3, $genericHostFrontendPayload['version'], 'generic Host frontend uses v3 payload');
+eq(1, count($genericHostFrontendPayload['objects']), 'generic Host frontend payload has zero explicit backend dependencies');
+eq('frontend', $genericHostFrontendPayload['objects'][0]['object_type'], 'generic Host payload contains only the shared frontend');
+eq('', $genericHostFrontendPayload['objects'][0]['data']['sync_default_backend_name'], 'generic Host frontend carries no default backend');
+eq($genericHostDispatch, $genericHostFrontendPayload['objects'][0]['data']['customOptions'], 'generic Host dispatch is preserved in payload');
+
+$genericHostFrontendReceiver = receiverBase();
+$genericHostFrontendReceiver['cert'] = [[
+    'refid' => 'receiver-oidc-cert-ref',
+    'descr' => 'oidc-ingress',
+]];
+$genericHostFrontendCreated = HAProxySync::reconcile(
+    $genericHostFrontendReceiver,
+    $genericHostFrontendPayload,
+    nextFactory('generic-host-frontend-receiver-uuid-'),
+    nextFactory('generic-host-frontend-receiver-id-')
+);
+$genericHostFrontendRows = rows($genericHostFrontendCreated['config']['OPNsense']['HAProxy']['frontends'], 'frontend');
+$genericHostManagedFrontend = null;
+foreach ($genericHostFrontendRows as $frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $genericHostManagedFrontend = $frontendRow;
+        break;
+    }
+}
+eq(true, is_array($genericHostManagedFrontend), 'generic Host synchronized frontend created without backend payload');
+eq('', $genericHostManagedFrontend['defaultBackend'], 'generic Host frontend remains fail-closed without default backend');
+eq($genericHostDispatch, $genericHostManagedFrontend['customOptions'], 'generic Host dispatch survives receiver reconciliation verbatim');
+
+$unsafeGenericHostDispatch = $genericHostFrontendSource;
+foreach ($unsafeGenericHostDispatch['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['customOptions'] = 'use_backend nc-sni-%[req.hdr(host),lower]';
+    }
+}
+unset($frontendRow);
+bad(fn() => HAProxySync::buildPayload($unsafeGenericHostDispatch), 'non-approved generic Host expression is rejected');
+
+$multilineGenericHostDispatch = $genericHostFrontendSource;
+foreach ($multilineGenericHostDispatch['OPNsense']['HAProxy']['frontends']['frontend'] as &$frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'oidc-ingress') {
+        $frontendRow['customOptions'] = $genericHostDispatch . "\nhttp-request deny";
+    }
+}
+unset($frontendRow);
+bad(fn() => HAProxySync::buildPayload($multilineGenericHostDispatch), 'generic Host dispatch rejects arbitrary multiline directives');
+
 // HTTP/2 clients may coalesce multiple certificate-covered hostnames onto one
 // TLS connection. Per-request Host dispatch must therefore be accepted as a
 // strict fail-closed dynamic contract and preserve the rules verbatim.
