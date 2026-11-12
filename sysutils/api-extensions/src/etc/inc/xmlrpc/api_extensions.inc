@@ -7,6 +7,7 @@ require_once '/usr/local/opnsense/mvc/app/models/OPNsense/ApiExtensions/Interfac
 require_once '/usr/local/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxySync.php';
 
 use OPNsense\ApiExtensions\HAProxySync;
+use OPNsense\ApiExtensions\HAProxyTLSIdentitySync;
 use OPNsense\ApiExtensions\InterfaceSync;
 use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
@@ -67,45 +68,116 @@ function api_extensions_sync_haproxy_xmlrpc($payload)
 
     $previous = $config;
     $savedNewConfig = false;
+    $configLocked = false;
+    $materializerChanged = false;
+    $metadataChanged = false;
+    $graphChanged = false;
+
     try {
-        Config::getInstance()->lock();
+        $validatedPayload = HAProxySync::validatePayload($payload);
+        $configHandle = Config::getInstance();
+
+        if ($validatedPayload['version'] === HAProxySync::VERSION) {
+            // Phase 1: persist only non-secret receiver-local policy/identity
+            // metadata. Do not hold the OPNsense config lock while invoking
+            // configd: the child materializer needs the same lock.
+            $configHandle->lock();
+            $configLocked = true;
+
+            $metadataConfig = $config;
+            InterfaceSync::reconcilePolicies(
+                $metadataConfig,
+                ['policies' => $validatedPayload['policies'], 'prune' => false],
+                fn() => generate_uuid()
+            );
+            $tlsPlan = HAProxyTLSIdentitySync::reconcile(
+                $metadataConfig,
+                $validatedPayload['tls_identities'],
+                fn() => generate_uuid()
+            );
+            $metadataConfig = $tlsPlan['config'];
+            $metadataChanged = $metadataConfig !== $config;
+
+            if ($metadataChanged) {
+                $config = $metadataConfig;
+                $saved = write_config('Synchronize HAProxy TLS identity metadata from HA primary');
+                if ($saved === false || $saved === -1) {
+                    throw new \RuntimeException('unable to save synchronized HAProxy TLS identity metadata');
+                }
+                $savedNewConfig = true;
+            }
+
+            $configHandle->unlock();
+            $configLocked = false;
+
+            $materializer = api_extensions_haproxy_tls_identity_reconcile_local();
+            $materializerChanged = !empty($materializer['changed']);
+            $savedNewConfig = $savedNewConfig || $materializerChanged;
+
+            // The materializer updates Trust/frontend membership through a
+            // separate process. Reload before semantic description -> local
+            // refid resolution in the full HAProxy graph reconciliation.
+            $configHandle->forceReload();
+            $config = $configHandle->toArray();
+        }
+
+        // Phase 2: apply the ordinary policy-managed HAProxy graph. For v4 the
+        // TLS identity step above is now idempotent and all receiver-local cert
+        // refs needed by any synchronized frontend are already materialized.
+        $configHandle->lock();
+        $configLocked = true;
         $result = HAProxySync::reconcile(
             $config,
-            $payload,
+            $validatedPayload,
             fn() => generate_uuid(),
             fn() => uniqid('', true)
         );
-        if (!$result['changed']) {
-            return ['status' => 'ok', 'changed' => false, 'count' => $result['count']];
+        $graphChanged = $result['changed'];
+
+        if ($graphChanged) {
+            $config = $result['config'];
+            $saved = write_config('Synchronize policy-managed HAProxy objects from HA primary');
+            if ($saved === false || $saved === -1) {
+                throw new \RuntimeException('unable to save synchronized HAProxy objects');
+            }
+            $savedNewConfig = true;
         }
 
-        $config = $result['config'];
-        $saved = write_config('Synchronize policy-managed HAProxy objects from HA primary');
-        if ($saved === false || $saved === -1) {
-            throw new \RuntimeException('unable to save synchronized HAProxy objects');
-        }
-        $savedNewConfig = true;
+        $configHandle->unlock();
+        $configLocked = false;
 
-        $backend = new Backend();
-        // HAProxy's configtest action validates haproxy.conf.staging, so the MVC
-        // templates must be rendered after write_config() and before syntax testing.
-        $backend->configdRun('template reload OPNsense/HAProxy');
-        $configTest = trim($backend->configdRun('haproxy configtest'));
-        // The native HAProxy WebUI treats ALERT output as the critical failure
-        // signal. A valid configuration commonly returns an empty response.
-        if (stripos($configTest, 'ALERT') !== false) {
-            throw new \RuntimeException('synchronized HAProxy configuration failed validation: ' . api_extensions_haproxy_test_summary($configTest));
-        }
+        if ($graphChanged) {
+            $backend = new Backend();
+            // HAProxy's configtest action validates haproxy.conf.staging, so
+            // templates must be rendered after write_config() first.
+            $backend->configdRun('template reload OPNsense/HAProxy');
+            $configTest = trim($backend->configdRun('haproxy configtest'));
+            if (stripos($configTest, 'ALERT') !== false) {
+                throw new \RuntimeException(
+                    'synchronized HAProxy configuration failed validation: ' .
+                    api_extensions_haproxy_test_summary($configTest)
+                );
+            }
 
-        $enabled = api_extensions_haproxy_enabled($config);
-        $backend->configdRun($enabled ? 'haproxy reload' : 'haproxy deploy');
+            $enabled = api_extensions_haproxy_enabled($config);
+            $backend->configdRun($enabled ? 'haproxy reload' : 'haproxy deploy');
+        }
 
         return [
             'status' => 'ok',
-            'changed' => true,
+            'changed' => $metadataChanged || $materializerChanged || $graphChanged,
             'count' => $result['count'],
         ];
     } catch (\Throwable $error) {
+        if ($configLocked) {
+            try {
+                Config::getInstance()->unlock();
+            } catch (\Throwable $unlockError) {
+                log_msg('Policy-managed HAProxy synchronization unlock failed: ' . $unlockError->getMessage(), LOG_ERR);
+            }
+            $configLocked = false;
+        }
+
         if ($savedNewConfig) {
             $config = $previous;
             try {
@@ -113,16 +185,53 @@ function api_extensions_sync_haproxy_xmlrpc($payload)
                 if ($rolledBack === false || $rolledBack === -1) {
                     throw new \RuntimeException('unable to save HAProxy synchronization rollback');
                 }
+
+                Config::getInstance()->forceReload();
+
+                // Best-effort local secret/material cleanup against the
+                // restored declarative identity contract. This never copies
+                // private material between peers.
+                try {
+                    api_extensions_haproxy_tls_identity_reconcile_local();
+                } catch (\Throwable $cleanupError) {
+                    log_msg(
+                        'HAProxy TLS identity rollback cleanup failed: ' . $cleanupError->getMessage(),
+                        LOG_ERR
+                    );
+                }
+
                 $backend = new Backend();
                 $backend->configdRun('template reload OPNsense/HAProxy');
-                $backend->configdRun(api_extensions_haproxy_enabled($previous) ? 'haproxy reload' : 'haproxy deploy');
+                $backend->configdRun(
+                    api_extensions_haproxy_enabled($previous) ? 'haproxy reload' : 'haproxy deploy'
+                );
             } catch (\Throwable $rollbackError) {
-                log_msg('Policy-managed HAProxy synchronization rollback failed: ' . $rollbackError->getMessage(), LOG_ERR);
+                log_msg(
+                    'Policy-managed HAProxy synchronization rollback failed: ' . $rollbackError->getMessage(),
+                    LOG_ERR
+                );
             }
         }
+
         log_msg('Policy-managed HAProxy synchronization failed: ' . $error->getMessage(), LOG_ERR);
         return ['status' => 'failed', 'message' => $error->getMessage()];
     }
+}
+
+function api_extensions_haproxy_tls_identity_reconcile_local(): array
+{
+    $raw = trim((new Backend())->configdRun('api_extensions haproxy_tls_identity_reconcile'));
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded) || ($decoded['status'] ?? '') !== 'ok') {
+        $message = is_array($decoded)
+            ? trim((string)($decoded['message'] ?? ''))
+            : '';
+        throw new \RuntimeException(
+            'Router-local HAProxy TLS identity reconciliation failed' .
+            ($message !== '' ? ': ' . $message : ($raw !== '' ? ': ' . $raw : ''))
+        );
+    }
+    return $decoded;
 }
 
 function api_extensions_haproxy_enabled($candidate)
