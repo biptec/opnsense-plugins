@@ -2,10 +2,12 @@
 namespace OPNsense\ApiExtensions;
 
 require_once __DIR__ . '/InterfaceSync.php';
+require_once __DIR__ . '/HAProxyTLSIdentitySync.php';
 
 final class HAProxySync
 {
-    public const VERSION = 3;
+    public const VERSION = 4;
+    public const FRONTEND_VERSION = 3;
     public const LEGACY_VERSION = 2;
     public const HA_SYNC_ITEM = 'haproxy_objects';
 
@@ -754,32 +756,54 @@ final class HAProxySync
         $payloadVersion = self::LEGACY_VERSION;
         foreach ($payloadObjects as $row) {
             if ($row['object_type'] === 'frontend') {
-                $payloadVersion = self::VERSION;
+                $payloadVersion = self::FRONTEND_VERSION;
                 break;
             }
         }
 
-        return [
+        $tlsIdentities = HAProxyTLSIdentitySync::buildPayload($config);
+        if (HAProxyTLSIdentitySync::isAuthoritative($config) || $tlsIdentities !== []) {
+            $payloadVersion = self::VERSION;
+        }
+
+        $payload = [
             'version' => $payloadVersion,
             'policies' => $payloadPolicies,
             'objects' => $payloadObjects,
         ];
+        if ($payloadVersion === self::VERSION) {
+            // Version 4 carries TLS identity registrations independently of
+            // frontend ownership. A consumer can therefore synchronize an
+            // additive identity for a Core-owned shared frontend without
+            // placing that frontend in the consumer HA payload.
+            $payload['tls_identities'] = $tlsIdentities;
+        }
+        return $payload;
     }
 
     public static function validatePayload($payload): array
     {
         if (!is_array($payload) ||
-            array_diff(array_keys($payload), ['version', 'policies', 'objects']) ||
             !array_key_exists('version', $payload) ||
             !array_key_exists('policies', $payload) ||
             !array_key_exists('objects', $payload)) {
             self::fail('invalid HAProxy sync payload');
         }
         $payloadVersion = $payload['version'];
-        if (!in_array($payloadVersion, [self::LEGACY_VERSION, self::VERSION], true) ||
+        if (!in_array($payloadVersion, [self::LEGACY_VERSION, self::FRONTEND_VERSION, self::VERSION], true) ||
             !is_array($payload['policies']) ||
             !is_array($payload['objects'])) {
             self::fail('unsupported HAProxy sync payload');
+        }
+        $allowedKeys = ['version', 'policies', 'objects'];
+        if ($payloadVersion === self::VERSION) {
+            $allowedKeys[] = 'tls_identities';
+            if (!array_key_exists('tls_identities', $payload) || !is_array($payload['tls_identities'])) {
+                self::fail('HAProxy sync payload version 4 requires tls_identities');
+            }
+        }
+        if (array_diff(array_keys($payload), $allowedKeys)) {
+            self::fail('invalid HAProxy sync payload');
         }
 
         $validatedPolicies = InterfaceSync::validatePayload([
@@ -806,7 +830,7 @@ final class HAProxySync
             }
             $type = self::objectType($row['object_type']);
             if ($payloadVersion === self::LEGACY_VERSION && $type === 'frontend') {
-                self::fail('HAProxy frontend synchronization requires payload version 3');
+                self::fail('HAProxy frontend synchronization requires payload version 3 or newer');
             }
             $name = self::objectName($row['object_name']);
             $policyId = trim((string)$row['policy_id']);
@@ -941,11 +965,19 @@ final class HAProxySync
             $typeOrder = ['healthcheck' => 0, 'server' => 1, 'backend' => 2, 'frontend' => 3];
             return [$typeOrder[$a['object_type']], $a['object_name']] <=> [$typeOrder[$b['object_type']], $b['object_name']];
         });
-        return [
+
+        $validated = [
             'version' => $payloadVersion,
             'policies' => $validatedPolicies['policies'],
             'objects' => $objects,
         ];
+        if ($payloadVersion === self::VERSION) {
+            $validated['tls_identities'] = HAProxyTLSIdentitySync::validatePayload(
+                $payload['tls_identities'],
+                $policyMap
+            );
+        }
+        return $validated;
     }
 
     private static function assignmentRowsRaw(array $config): array
@@ -1008,8 +1040,25 @@ final class HAProxySync
         ?callable $idFactory = null
     ): array {
         $payload = self::validatePayload($payload);
+        $originalConfig = $config;
         $uuidFactory ??= fn() => bin2hex(random_bytes(16));
         $idFactory ??= fn() => uniqid('', true);
+
+        $tlsIdentityPlan = [
+            'config' => $config,
+            'changed' => false,
+            'count' => 0,
+            'ensure' => [],
+            'remove' => [],
+        ];
+        if ($payload['version'] === self::VERSION) {
+            $tlsIdentityPlan = HAProxyTLSIdentitySync::reconcile(
+                $config,
+                $payload['tls_identities'],
+                $uuidFactory
+            );
+            $config = $tlsIdentityPlan['config'];
+        }
 
         $inventory = self::inventory($config);
         $currentObjects = $inventory['objects'];
@@ -1297,10 +1346,15 @@ final class HAProxySync
 
         return [
             'config' => $next,
-            'changed' => $next !== $config,
+            'changed' => $next !== $originalConfig,
             'count' => count($desired),
             'plan' => [
                 'policies' => $policyPlan,
+                'tls_identities' => [
+                    'count' => $tlsIdentityPlan['count'],
+                    'ensure' => $tlsIdentityPlan['ensure'],
+                    'remove' => $tlsIdentityPlan['remove'],
+                ],
             ],
         ];
     }

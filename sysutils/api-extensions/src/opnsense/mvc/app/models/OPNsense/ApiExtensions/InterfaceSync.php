@@ -590,6 +590,31 @@ final class InterfaceSync
                     $references[$policyByReference[$reference]] = true;
                 }
             }
+
+            // HAProxy TLS identities use the same shared policy table but are
+            // intentionally not HAProxy frontend objects. Preserve a policy
+            // while any node-local TLS identity still references it.
+            $tlsRoot = $config['OPNsense']['ApiExtensions']['HAProxyTLSIdentity'] ?? [];
+            if ($tlsRoot !== null && $tlsRoot !== '' && !is_array($tlsRoot)) {
+                self::fail('HAProxy TLS identity policy reference container is invalid');
+            }
+            foreach (self::containerRows(
+                is_array($tlsRoot) ? ($tlsRoot['identities'] ?? []) : [],
+                'identity',
+                'HAProxy TLS identity policy reference container'
+            ) as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $reference = trim((string)($row['policy_id'] ?? ''));
+                if ($reference === '') {
+                    continue;
+                }
+                if (!isset($policyByReference[$reference])) {
+                    self::fail('HAProxy TLS identity references unknown interface sync policy relation ' . $reference);
+                }
+                $references[$policyByReference[$reference]] = true;
+            }
             foreach ($current as $id => $row) {
                 if (isset($desired[$id])) {
                     continue;

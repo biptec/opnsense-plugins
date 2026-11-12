@@ -1,0 +1,85 @@
+<?php
+
+namespace OPNsense\ApiExtensions;
+
+require_once __DIR__ . '/HAProxyTLSIdentitySync.php';
+
+/**
+ * Deterministic Router-local plan for HAProxy TLS identity materialization.
+ *
+ * The plan contains no private key or certificate body. Multiple frontend
+ * registrations for the same DNS identity intentionally share one node-local
+ * certificate/key while retaining independent frontend memberships.
+ */
+final class HAProxyTLSIdentityMaterializer
+{
+    private const CERT_DIR = '/usr/local/etc/api-extensions/haproxy-tls';
+
+    private static function realm($value): string
+    {
+        $value = strtoupper(trim((string)$value));
+        if ($value === '' || !preg_match('/^[A-Z0-9][A-Z0-9.-]{0,253}$/D', $value)) {
+            throw new \InvalidArgumentException('invalid FreeIPA realm for HAProxy TLS identity materialization');
+        }
+        return $value;
+    }
+
+    public static function refID(string $dnsName): string
+    {
+        $description = HAProxyTLSIdentitySync::certificateDescription($dnsName);
+        return substr(hash('sha256', 'api-extensions-haproxy-tls:' . $description), 0, 13);
+    }
+
+    public static function fileToken(string $dnsName): string
+    {
+        $description = HAProxyTLSIdentitySync::certificateDescription($dnsName);
+        return substr(hash('sha256', 'api-extensions-haproxy-tls-files:' . $description), 0, 20);
+    }
+
+    public static function requestID(string $dnsName): string
+    {
+        return 'haproxy-tls-' . self::fileToken($dnsName);
+    }
+
+    public static function certificatePath(string $dnsName): string
+    {
+        return self::CERT_DIR . '/' . self::fileToken($dnsName) . '.crt';
+    }
+
+    public static function keyPath(string $dnsName): string
+    {
+        return self::CERT_DIR . '/' . self::fileToken($dnsName) . '.key';
+    }
+
+    public static function plan(array $config, string $realm): array
+    {
+        $realm = self::realm($realm);
+        $byDNS = [];
+        foreach (HAProxyTLSIdentitySync::identities($config) as $identity) {
+            $dns = $identity['dns_name'];
+            if (!isset($byDNS[$dns])) {
+                $byDNS[$dns] = [
+                    'dns_name' => $dns,
+                    'principal' => 'HAPROXY/' . $dns . '@' . $realm,
+                    'subject' => 'CN=' . $dns . ',O=' . $realm,
+                    'certificate_description' => HAProxyTLSIdentitySync::certificateDescription($dns),
+                    'certificate_ref_id' => self::refID($dns),
+                    'request_id' => self::requestID($dns),
+                    'certificate_path' => self::certificatePath($dns),
+                    'key_path' => self::keyPath($dns),
+                    'frontends' => [],
+                ];
+            }
+            $byDNS[$dns]['frontends'][] = $identity['frontend_name'];
+        }
+
+        foreach ($byDNS as &$entry) {
+            $entry['frontends'] = array_values(array_unique($entry['frontends']));
+            sort($entry['frontends']);
+        }
+        unset($entry);
+        ksort($byDNS);
+
+        return array_values($byDNS);
+    }
+}

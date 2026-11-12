@@ -3,6 +3,7 @@ require_once __DIR__ . '/../src/opnsense/mvc/app/models/OPNsense/ApiExtensions/I
 require_once __DIR__ . '/../src/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxySync.php';
 
 use OPNsense\ApiExtensions\HAProxySync;
+use OPNsense\ApiExtensions\HAProxyTLSIdentitySync;
 use OPNsense\ApiExtensions\InterfaceSync;
 
 function eq($expected, $actual, string $message): void
@@ -298,7 +299,7 @@ $frontendSource['OPNsense']['HAProxy']['frontends']['frontend'] = [
 ];
 
 $frontendPayload = HAProxySync::buildPayload($frontendSource);
-eq(3, $frontendPayload['version'], 'managed frontend upgrades HAProxy payload to v3');
+eq(3, $frontendPayload['version'], 'managed frontend uses v3 until TLS identity sync is activated');
 eq(4, count($frontendPayload['objects']), 'managed frontend is included after backend');
 $frontendPayloadRow = $frontendPayload['objects'][3];
 eq('frontend', $frontendPayloadRow['object_type'], 'frontend emitted after backend dependencies');
@@ -346,6 +347,164 @@ $frontendIdempotent = HAProxySync::reconcile(
     fn() => throw new RuntimeException('frontend idempotent id factory should not run')
 );
 eq(false, $frontendIdempotent['changed'], 'frontend second sync is idempotent');
+
+// Version 3 remains accepted during the required peer-first plugin rollout.
+// It contains no TLS identity metadata and therefore leaves receiver-local
+// identity registrations untouched.
+$legacyFrontendPayload = $frontendPayload;
+$legacyFrontendPayload['version'] = 3;
+unset($legacyFrontendPayload['tls_identities']);
+$legacyFrontendReceiver = $frontendCreatedConfig;
+$legacyFrontendReceiver['OPNsense']['ApiExtensions']['HAProxyTLSIdentity'] = [
+    'identities' => ['identity' => [[
+        '@attributes' => ['uuid' => 'legacy-local-identity'],
+        'frontend_name' => 'oidc-ingress',
+        'dns_name' => 'legacy.example.invalid',
+    ]]],
+];
+$legacyFrontendResult = HAProxySync::reconcile(
+    $legacyFrontendReceiver,
+    $legacyFrontendPayload,
+    fn() => throw new RuntimeException('v3 compatibility UUID factory should not run'),
+    fn() => throw new RuntimeException('v3 compatibility id factory should not run')
+);
+eq(
+    $legacyFrontendReceiver['OPNsense']['ApiExtensions']['HAProxyTLSIdentity'],
+    $legacyFrontendResult['config']['OPNsense']['ApiExtensions']['HAProxyTLSIdentity'],
+    'v3 payload preserves receiver-local TLS identity metadata'
+);
+
+
+// Version 4 carries a consumer TLS identity independently of the shared
+// frontend object. The consumer payload contains only its backend graph plus
+// the additive identity; the Core-owned shared frontend remains local on each
+// Router and is referenced only by semantic name.
+$tlsIdentitySource = $source;
+$sourceLocalFrontend = $tlsIdentitySource['OPNsense']['HAProxy']['frontends']['frontend'];
+$tlsIdentitySource['OPNsense']['HAProxy']['frontends']['frontend'] = [
+    $sourceLocalFrontend,
+    [
+        '@attributes' => ['uuid' => 'source-arcturus-frontend'],
+        'id' => 'source-arcturus-id',
+        'enabled' => '1',
+        'name' => 'arcturus-shared-https',
+        'description' => 'Core-owned Arcturus shared HTTPS frontend',
+        'bind' => '10.0.16.80:443',
+        'mode' => 'http',
+        'defaultBackend' => '',
+        'ssl_enabled' => '1',
+        'ssl_certificates' => 'source-arcturus-cert-ref,source-router-cert-ref',
+        'ssl_default_certificate' => 'source-arcturus-cert-ref',
+        'customOptions' => 'use_backend nc-sni-%[req.hdr(host),lower,field(1,:)]',
+        'linkedActions' => '',
+    ],
+];
+$tlsIdentitySource['cert'] = [
+    ['refid' => 'source-arcturus-cert-ref', 'descr' => 'arcturus-default'],
+    ['refid' => 'source-router-cert-ref', 'descr' => 'HAProxy TLS router.example.invalid'],
+];
+$tlsIdentitySource['OPNsense']['ApiExtensions']['HAProxyTLSIdentity'] = [
+    'sync_marker' => ['enabled' => '1'],
+    'identities' => ['identity' => [[
+        '@attributes' => ['uuid' => 'source-router-tls-identity'],
+        'frontend_name' => 'arcturus-shared-https',
+        'dns_name' => 'router.example.invalid',
+        'policy_id' => 'p-endpoint',
+    ]]],
+];
+
+$tlsIdentityPayload = HAProxySync::buildPayload($tlsIdentitySource);
+eq(4, $tlsIdentityPayload['version'], 'TLS identity enables v4 payload without synchronizing shared frontend');
+eq(3, count($tlsIdentityPayload['objects']), 'consumer payload still contains only healthcheck/server/backend');
+eq(false, in_array('frontend', array_column($tlsIdentityPayload['objects'], 'object_type'), true), 'Core-owned shared frontend is absent from consumer payload');
+eq([[
+    'frontend_name' => 'arcturus-shared-https',
+    'dns_name' => 'router.example.invalid',
+    'policy_id' => 'endpoint',
+]], $tlsIdentityPayload['tls_identities'], 'TLS identity payload is semantic, policy-scoped and non-secret');
+
+$tlsIdentityReceiver = receiverBase();
+$receiverLocalFrontend = $tlsIdentityReceiver['OPNsense']['HAProxy']['frontends']['frontend'];
+$tlsIdentityReceiver['OPNsense']['HAProxy']['frontends']['frontend'] = [
+    $receiverLocalFrontend,
+    [
+        '@attributes' => ['uuid' => 'receiver-arcturus-frontend'],
+        'id' => 'receiver-arcturus-id',
+        'enabled' => '1',
+        'name' => 'arcturus-shared-https',
+        'description' => 'Core-owned Arcturus shared HTTPS frontend',
+        'bind' => '10.0.16.80:443',
+        'mode' => 'http',
+        'defaultBackend' => '',
+        'ssl_enabled' => '1',
+        'ssl_certificates' => 'receiver-arcturus-cert-ref',
+        'ssl_default_certificate' => 'receiver-arcturus-cert-ref',
+        'customOptions' => 'use_backend nc-sni-%[req.hdr(host),lower,field(1,:)]',
+        'linkedActions' => '',
+    ],
+];
+$tlsIdentityReceiver['cert'] = [
+    ['refid' => 'receiver-arcturus-cert-ref', 'descr' => 'arcturus-default'],
+];
+
+$tlsIdentityCreated = HAProxySync::reconcile(
+    $tlsIdentityReceiver,
+    $tlsIdentityPayload,
+    nextFactory('tls-identity-receiver-uuid-'),
+    nextFactory('tls-identity-receiver-id-')
+);
+eq(true, $tlsIdentityCreated['changed'], 'TLS identity payload changes receiver metadata and backend graph');
+eq(1, $tlsIdentityCreated['plan']['tls_identities']['count'], 'TLS identity plan count');
+eq(1, count($tlsIdentityCreated['plan']['tls_identities']['ensure']), 'new TLS identity requires receiver-local materialization');
+$receiverIdentities = HAProxyTLSIdentitySync::identities($tlsIdentityCreated['config']);
+eq(
+    ['arcturus-shared-https|router.example.invalid'],
+    array_keys($receiverIdentities),
+    'receiver persists identity against local Core-owned shared frontend'
+);
+eq(
+    'endpoint',
+    $receiverIdentities['arcturus-shared-https|router.example.invalid']['policy_id'],
+    'receiver maps HA policy to its local policy relation'
+);
+$tlsFrontendRows = rows($tlsIdentityCreated['config']['OPNsense']['HAProxy']['frontends'], 'frontend');
+$tlsSharedFrontend = null;
+foreach ($tlsFrontendRows as $frontendRow) {
+    if (($frontendRow['name'] ?? '') === 'arcturus-shared-https') {
+        $tlsSharedFrontend = $frontendRow;
+        break;
+    }
+}
+eq(true, is_array($tlsSharedFrontend), 'Core-owned shared frontend remains present locally');
+eq('receiver-arcturus-frontend', $tlsSharedFrontend['@attributes']['uuid'], 'consumer sync does not replace shared frontend');
+eq('receiver-arcturus-cert-ref', $tlsSharedFrontend['ssl_certificates'], 'pure metadata reconcile does not fabricate certificate membership before materialization');
+
+$tlsIdentityIdempotent = HAProxySync::reconcile(
+    $tlsIdentityCreated['config'],
+    $tlsIdentityPayload,
+    fn() => throw new RuntimeException('TLS identity idempotent UUID factory should not run'),
+    fn() => throw new RuntimeException('TLS identity idempotent id factory should not run')
+);
+eq(false, $tlsIdentityIdempotent['changed'], 'TLS identity second sync is idempotent');
+eq([], $tlsIdentityIdempotent['plan']['tls_identities']['ensure'], 'converged TLS identity is not re-materialized');
+eq([], $tlsIdentityIdempotent['plan']['tls_identities']['remove'], 'converged TLS identity is not removed');
+
+// Deleting the last consumer remains v4-authoritative: an explicit empty
+// tls_identities list removes the receiver registration instead of falling
+// back to legacy "preserve local identities" behavior.
+$tlsIdentityRemovedSource = $tlsIdentitySource;
+$tlsIdentityRemovedSource['OPNsense']['ApiExtensions']['HAProxyTLSIdentity']['identities'] = '';
+$tlsIdentityRemovedPayload = HAProxySync::buildPayload($tlsIdentityRemovedSource);
+eq(4, $tlsIdentityRemovedPayload['version'], 'authoritative marker keeps v4 after last identity deletion');
+eq([], $tlsIdentityRemovedPayload['tls_identities'], 'last identity deletion sends authoritative empty set');
+$tlsIdentityRemoved = HAProxySync::reconcile(
+    $tlsIdentityCreated['config'],
+    $tlsIdentityRemovedPayload,
+    fn() => throw new RuntimeException('identity removal must not allocate UUID'),
+    fn() => throw new RuntimeException('identity removal must not allocate HAProxy id')
+);
+eq(1, count($tlsIdentityRemoved['plan']['tls_identities']['remove']), 'receiver schedules local certificate cleanup for deleted identity');
+eq([], HAProxyTLSIdentitySync::buildPayload($tlsIdentityRemoved['config']), 'receiver converges to empty synchronized identity set');
 
 // A shared fail-closed internal frontend intentionally has no default backend.
 // It is accepted only with the exact dynamic SNI dispatch contract used by
@@ -424,7 +583,7 @@ foreach ($genericHostFrontendSource['OPNsense']['HAProxy']['frontends']['fronten
 }
 unset($frontendRow);
 $genericHostFrontendPayload = HAProxySync::buildPayload($genericHostFrontendSource);
-eq(3, $genericHostFrontendPayload['version'], 'generic Host frontend uses v3 payload');
+eq(3, $genericHostFrontendPayload['version'], 'generic Host frontend remains v3 before TLS identity sync activation');
 eq(1, count($genericHostFrontendPayload['objects']), 'generic Host frontend payload has zero explicit backend dependencies');
 eq('frontend', $genericHostFrontendPayload['objects'][0]['object_type'], 'generic Host payload contains only the shared frontend');
 eq('', $genericHostFrontendPayload['objects'][0]['data']['sync_default_backend_name'], 'generic Host frontend carries no default backend');
@@ -562,7 +721,7 @@ bad(
 );
 
 $reverseFrontendPayload = HAProxySync::buildPayload($frontendCreatedConfig);
-eq(3, $reverseFrontendPayload['version'], 'receiver can produce v3 frontend payload');
+eq(3, $reverseFrontendPayload['version'], 'receiver preserves v3 frontend payload before TLS identity sync activation');
 eq('["oidc-ingress"]', $reverseFrontendPayload['objects'][3]['data']['sync_ssl_certificate_descriptions'], 'reverse payload remains certificate-ref independent');
 
 $missingFrontendCert = receiverBase();
