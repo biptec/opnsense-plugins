@@ -121,7 +121,7 @@ function sourceConfig(): array
                     'name' => $backendName,
                     'description' => 'Customer SNI backend',
                     'mode' => 'tcp',
-                    'algorithm' => 'roundrobin',
+                    'algorithm' => 'leastconn',
                     'proxyProtocol' => 'v2',
                     'linkedServers' => 'source-server-uuid',
                     'linkedFcgi' => '',
@@ -227,6 +227,7 @@ eq(false, array_key_exists('linkedServers', $payload['objects'][2]['data']), 'so
 eq(false, array_key_exists('healthCheck', $payload['objects'][2]['data']), 'source healthCheck UUID stripped');
 eq('v2', $payload['objects'][2]['data']['proxyProtocol'], 'backend PROXY v2 scalar copied');
 eq('backend', $payload['objects'][2]['data']['healthCheckProxyProto'], 'health-check PROXY behavior copied');
+eq('leastconn', $payload['objects'][2]['data']['algorithm'], 'typed backend balancing algorithm copied');
 
 $receiver = receiverBase();
 $created = HAProxySync::reconcile($receiver, $payload, nextFactory('receiver-uuid-'), nextFactory('receiver-id-'));
@@ -247,6 +248,7 @@ eq('receiver-uuid-3', $backendRows[0]['@attributes']['uuid'], 'receiver generate
 eq('receiver-id-3', $backendRows[0]['id'], 'receiver generates local backend id');
 eq('receiver-uuid-2', $backendRows[0]['linkedServers'], 'backend remapped to receiver-local server UUID');
 eq('receiver-uuid-1', $backendRows[0]['healthCheck'], 'backend remapped to receiver-local healthcheck UUID');
+eq('leastconn', $backendRows[0]['algorithm'], 'receiver preserves typed backend balancing algorithm');
 eq('192.0.2.44', $serverRows[0]['address'], 'server scalar configuration copied');
 eq('1', $serverRows[0]['ssl'], 'server TLS flag copied');
 eq('deneb.svc.sandbox.biptec.net', $serverRows[0]['sslSNI'], 'server TLS SNI copied');
