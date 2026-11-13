@@ -235,7 +235,8 @@ eq(true, str_contains($hook, "'sync_prepare' => 'api_extensions_interface_sync_p
 eq(true, str_contains($hook, "'sync_finalize' => 'api_extensions_interface_sync_finalize'"), 'interface sync prunes peer scaffolding after native sections');
 eq(true, str_contains($hook, "'id' => 'haproxy_objects'"), 'HAProxy Objects sync item registered in standard HA selector');
 eq(true, str_contains($hook, "gettext('HAProxy Objects')"), 'HAProxy Objects uses the native Status/Settings display name');
-eq(true, str_contains($hook, "'sync_finalize' => 'api_extensions_haproxy_sync_finalize'"), 'HAProxy object synchronization is a native HA finalizer');
+eq(true, str_contains($hook, "'sync_activate' => 'api_extensions_haproxy_sync_activate'"), 'HAProxy object synchronization activates only after native HA phases');
+eq(false, str_contains($hook, "'sync_finalize' => 'api_extensions_haproxy_sync_finalize'"), 'HAProxy object synchronization is not a pre-VIP native finalizer');
 
 eq(false, file_exists(__DIR__ . '/../src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php'), 'parallel config sync script removed');
 eq(false, file_exists(__DIR__ . '/../src/opnsense/mvc/app/controllers/OPNsense/ApiExtensions/Api/InterfaceSyncController.php'), 'parallel interface sync API controller removed');
