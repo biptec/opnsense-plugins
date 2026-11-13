@@ -79,6 +79,18 @@ class PackagingContractTests(unittest.TestCase):
         self.assertLess(verify, fallback)
         self.assertLess(fallback, postcondition)
 
+    def test_explicit_tls_issuance_does_not_reenter_postsave_reconcile(self):
+        source = RECONCILER.read_text()
+        self.assertIn("function ensure_postsave_tracking(array $item, string $postsave)", source)
+        self.assertIn("'-C', '/usr/bin/true'", source)
+        self.assertIn("'getcert', 'start-tracking'", source)
+        self.assertIn("ensure_postsave_tracking($item, $postsave);", source)
+
+        issuance = source.index("'-C', '/usr/bin/true'")
+        restore_hook = source.index("ensure_postsave_tracking($item, $postsave);", issuance)
+        self.assertLess(issuance, restore_hook)
+        self.assertNotIn("'-D', $item['dns_name'],\n        '-C', $postsave", source)
+
     def test_haproxy_sync_activates_only_after_native_sync_phases(self):
         source = SYNC_PLUGIN.read_text()
         self.assertIn("function api_extensions_haproxy_sync_activate()", source)
