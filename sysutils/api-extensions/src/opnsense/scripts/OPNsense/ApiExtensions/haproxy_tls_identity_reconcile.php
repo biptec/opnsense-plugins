@@ -163,6 +163,34 @@ function tracking_matches(array $item): bool
     return $trackingNames === [$item['dns_name']];
 }
 
+function tracking_postsave_matches(array $item, string $postsave): bool
+{
+    $output = request_output($item['request_id']);
+    if ($output === null) {
+        return false;
+    }
+    if (!preg_match('/^\s*post-save command:\s*(.*)$/mi', $output, $match)) {
+        return false;
+    }
+    return trim((string)$match[1]) === $postsave;
+}
+
+function ensure_postsave_tracking(array $item, string $postsave): bool
+{
+    if (tracking_postsave_matches($item, $postsave)) {
+        return false;
+    }
+    run_command([
+        'getcert', 'start-tracking',
+        '-i', $item['request_id'],
+        '-C', $postsave,
+    ]);
+    if (!tracking_postsave_matches($item, $postsave)) {
+        fail('unable to configure HAProxy TLS renewal post-save hook for ' . $item['dns_name']);
+    }
+    return true;
+}
+
 function source_matches(array $item): bool
 {
     $certPath = $item['certificate_path'];
@@ -228,7 +256,7 @@ function ensure_source(array $item, string $postsave): bool
         }
     }
     if (source_matches($item)) {
-        return false;
+        return ensure_postsave_tracking($item, $postsave);
     }
 
     if (!is_dir(CERT_DIR) && !mkdir(CERT_DIR, 0700, true) && !is_dir(CERT_DIR)) {
@@ -237,12 +265,19 @@ function ensure_source(array $item, string $postsave): bool
     chmod(CERT_DIR, 0700);
     ensure_private_key($item['key_path']);
 
+    // Explicit issuance/resubmit is already synchronously reconciled by
+    // this process. Do not let certmonger's after-save hook re-enter the same
+    // HAProxy reconciliation while getcert -w is still in flight. A no-op
+    // command is used explicitly because omitting -C on resubmit preserves the
+    // previously configured after-save command. Once certificate convergence
+    // is proven below, restore the real post-save hook for future automatic
+    // renewals.
     $common = [
         '-c', 'IPA',
         '-N', $item['subject'],
         '-K', $item['principal'],
         '-D', $item['dns_name'],
-        '-C', $postsave,
+        '-C', '/usr/bin/true',
     ];
     if (request_output($item['request_id']) !== null) {
         run_command(array_merge(
@@ -274,6 +309,7 @@ function ensure_source(array $item, string $postsave): bool
     if (!source_matches($item)) {
         fail('FreeIPA certificate did not converge for ' . $item['dns_name']);
     }
+    ensure_postsave_tracking($item, $postsave);
     return true;
 }
 
