@@ -233,4 +233,29 @@ tlsEq(
     'private-key path is deterministic and node-local'
 );
 
+$runtimeParity = [
+    'frontend-a' => [
+        'local_certs' => ['/tmp/b.pem', '/tmp/a.pem'],
+        'remote_certs' => ['/tmp/a.pem', '/tmp/b.pem'],
+        'local_default' => '/tmp/a.pem',
+        'remote_default' => '/tmp/a.pem',
+    ],
+];
+tlsEq(false, HAProxyTLSIdentityMaterializer::runtimeMembershipChanged($runtimeParity), 'runtime certificate membership comparison is order-insensitive');
+
+$runtimeMissing = $runtimeParity;
+$runtimeMissing['frontend-a']['remote_certs'] = ['/tmp/a.pem'];
+tlsEq(true, HAProxyTLSIdentityMaterializer::runtimeMembershipChanged($runtimeMissing), 'runtime missing managed certificate requires HAProxy reload');
+
+$runtimeDefault = $runtimeParity;
+$runtimeDefault['frontend-a']['remote_default'] = '/tmp/b.pem';
+tlsEq(true, HAProxyTLSIdentityMaterializer::runtimeMembershipChanged($runtimeDefault), 'runtime default certificate mismatch requires HAProxy reload');
+
+tlsBad(
+    fn() => HAProxyTLSIdentityMaterializer::runtimeMembershipChanged([
+        'frontend-a' => ['local_certs' => 'not-a-list', 'remote_certs' => []],
+    ]),
+    'runtime certificate diff rejects malformed membership lists'
+);
+
 echo "ok\n";

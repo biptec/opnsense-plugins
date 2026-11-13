@@ -409,6 +409,7 @@ function import_and_bind(array $plan, array $ready): array
             }
         }
 
+        $membershipChanged = false;
         foreach ($cfg->OPNsense->HAProxy->frontends->frontend as $frontend) {
             $name = (string)$frontend->name;
             $defaultRef = trim((string)($frontend->ssl_default_certificate ?? ''));
@@ -432,7 +433,11 @@ function import_and_bind(array $plan, array $ready): array
                     $next = array_values(array_unique($next));
                 }
             }
-            $frontend->ssl_certificates = implode(',', $next);
+            $nextValue = implode(',', $next);
+            if ((string)($frontend->ssl_certificates ?? '') !== $nextValue) {
+                $membershipChanged = true;
+            }
+            $frontend->ssl_certificates = $nextValue;
         }
 
         $removeIndexes = [];
@@ -456,7 +461,11 @@ function import_and_bind(array $plan, array $ready): array
                 false
             );
         }
-        return ['changed' => $changed, 'backup' => $backup];
+        return [
+            'changed' => $changed,
+            'membership_changed' => $membershipChanged,
+            'backup' => $backup,
+        ];
     } finally {
         $config->unlock();
     }
@@ -507,7 +516,7 @@ function cleanup_orphans(array $plan): void
     }
 }
 
-function apply_haproxy_runtime(): void
+function apply_haproxy_runtime(bool $membershipChanged): void
 {
     $backend = new Backend();
     $backend->configdRun('template reload OPNsense/HAProxy');
@@ -515,6 +524,37 @@ function apply_haproxy_runtime(): void
     if (stripos($test, 'ALERT') !== false) {
         fail('HAProxy configuration failed validation after TLS identity reconciliation: ' . preg_replace('/\s+/', ' ', $test));
     }
+
+    // HAProxy's runtime certificate API can replace certificate contents that
+    // are already loaded, but it cannot add or remove crt-list membership. A
+    // membership change therefore needs a normal reload so the new frontend
+    // certificate set is activated. Pure renewal/content changes retain the
+    // zero-downtime runtime certificate sync path.
+    if (!$membershipChanged) {
+        $rawDiff = trim($backend->configdRun('haproxy cert_diff_bulk'));
+        try {
+            $runtimeDiff = json_decode($rawDiff, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $error) {
+            fail('HAProxy runtime certificate diff returned invalid JSON: ' . $error->getMessage());
+        }
+        if (!is_array($runtimeDiff)) {
+            fail('HAProxy runtime certificate diff returned an invalid payload');
+        }
+        $membershipChanged = HAProxyTLSIdentityMaterializer::runtimeMembershipChanged($runtimeDiff);
+    }
+
+    if ($membershipChanged) {
+        $config = Config::getInstance();
+        $config->forceReload();
+        $enabled = in_array(
+            (string)($config->object()->OPNsense->HAProxy->general->enabled ?? ''),
+            ['1', 'yes', 'on'],
+            true
+        );
+        $backend->configdRun($enabled ? 'haproxy reload' : 'haproxy deploy');
+        return;
+    }
+
     $backend->configdRun('haproxy cert_sync_bulk');
 }
 
@@ -587,7 +627,7 @@ function reconcile(bool $issue): array
     $configResult = import_and_bind($plan, $ready);
     try {
         if ($configResult['changed'] || $changedSource) {
-            apply_haproxy_runtime();
+            apply_haproxy_runtime($configResult['membership_changed']);
         }
     } catch (Throwable $runtimeError) {
         rollback_haproxy_config($configResult['backup']);
