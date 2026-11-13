@@ -18,6 +18,7 @@ final class HAProxyTLSIdentitySync
 {
     private const OBJECT_NAME = '/^[0-9A-Za-z._-]{1,255}$/D';
     private const HOST_NAME = '/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/D';
+    private const CERTIFICATE_DESCRIPTION_PREFIX = 'HAProxy TLS ';
 
     private static function fail(string $message): void
     {
@@ -202,7 +203,15 @@ final class HAProxyTLSIdentitySync
 
     public static function certificateDescription($dnsName): string
     {
-        return 'HAProxy TLS ' . self::hostName($dnsName);
+        return self::CERTIFICATE_DESCRIPTION_PREFIX . self::hostName($dnsName);
+    }
+
+    public static function isManagedCertificateDescription($description): bool
+    {
+        return str_starts_with(
+            trim((string)$description),
+            self::CERTIFICATE_DESCRIPTION_PREFIX
+        );
     }
 
     public static function validateLocalRegistration(
