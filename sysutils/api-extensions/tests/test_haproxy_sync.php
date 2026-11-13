@@ -424,6 +424,123 @@ eq([[
     'dns_name' => 'router.example.invalid',
     'policy_id' => 'endpoint',
 ]], $tlsIdentityPayload['tls_identities'], 'TLS identity payload is semantic, policy-scoped and non-secret');
+bad(
+    fn() => HAProxySync::bootstrapPayloadForMissingTLSIdentityFrontends(
+        receiverBase(),
+        $tlsIdentityPayload
+    ),
+    'consumer-only payload cannot bootstrap a missing Core-owned shared frontend'
+);
+
+// A one-time full HA sync after secondary replacement may carry the Core-owned
+// frontend and its TLS identity in the same payload. The receiver must stage
+// the missing frontend using only its pre-existing default certificate, then
+// materialize the node-local consumer identity before the final v4 reconcile.
+$freshRecoverySource = $tlsIdentitySource;
+$freshRecoverySource['OPNsense']['ApiExtensions']['InterfaceSyncPolicy']['haproxy_assignments']['assignment'][] = [
+    '@attributes' => ['uuid' => 'ha-frontend-arcturus-shared-https'],
+    'object_type' => 'frontend',
+    'object_name' => 'arcturus-shared-https',
+    'policy_id' => 'endpoint',
+];
+$freshRecoveryPayload = HAProxySync::buildPayload($freshRecoverySource);
+eq(4, $freshRecoveryPayload['version'], 'fresh recovery uses v4 payload');
+eq(4, count($freshRecoveryPayload['objects']), 'fresh recovery payload includes shared frontend');
+
+$freshRecoveryReceiver = receiverBase();
+$freshRecoveryReceiver['cert'] = [[
+    'refid' => 'receiver-arcturus-cert-ref',
+    'descr' => 'arcturus-default',
+]];
+$freshBootstrapPayload = HAProxySync::bootstrapPayloadForMissingTLSIdentityFrontends(
+    $freshRecoveryReceiver,
+    $freshRecoveryPayload
+);
+eq(3, $freshBootstrapPayload['version'], 'fresh receiver stages frontend graph as v3');
+eq(false, array_key_exists('tls_identities', $freshBootstrapPayload), 'bootstrap graph carries no TLS identity metadata');
+$freshBootstrapFrontend = null;
+foreach ($freshBootstrapPayload['objects'] as $row) {
+    if ($row['object_type'] === 'frontend' && $row['object_name'] === 'arcturus-shared-https') {
+        $freshBootstrapFrontend = $row;
+        break;
+    }
+}
+eq(true, is_array($freshBootstrapFrontend), 'fresh bootstrap payload contains missing shared frontend');
+eq(
+    '["arcturus-default"]',
+    $freshBootstrapFrontend['data']['sync_ssl_certificate_descriptions'],
+    'fresh bootstrap excludes not-yet-materialized consumer certificate'
+);
+eq(
+    'arcturus-default',
+    $freshBootstrapFrontend['data']['sync_ssl_default_certificate_description'],
+    'fresh bootstrap preserves pre-existing default certificate'
+);
+
+$freshBootstrapCreated = HAProxySync::reconcile(
+    $freshRecoveryReceiver,
+    $freshBootstrapPayload,
+    nextFactory('fresh-bootstrap-uuid-'),
+    nextFactory('fresh-bootstrap-id-')
+);
+$freshBootstrapConfig = $freshBootstrapCreated['config'];
+$freshBootstrapFrontends = rows($freshBootstrapConfig['OPNsense']['HAProxy']['frontends'], 'frontend');
+$freshSharedFrontend = null;
+foreach ($freshBootstrapFrontends as $row) {
+    if (($row['name'] ?? '') === 'arcturus-shared-https') {
+        $freshSharedFrontend = $row;
+        break;
+    }
+}
+eq(true, is_array($freshSharedFrontend), 'fresh receiver creates shared frontend before identity metadata');
+eq(
+    'receiver-arcturus-cert-ref',
+    $freshSharedFrontend['ssl_certificates'],
+    'fresh receiver resolves the node-local default certificate'
+);
+
+$freshIdentityPlan = HAProxyTLSIdentitySync::reconcile(
+    $freshBootstrapConfig,
+    $freshRecoveryPayload['tls_identities'],
+    nextFactory('fresh-tls-identity-uuid-')
+);
+eq(1, count($freshIdentityPlan['ensure']), 'fresh receiver can register identity after frontend staging');
+
+$freshMaterializedConfig = $freshIdentityPlan['config'];
+$freshMaterializedConfig['cert'][] = [
+    'refid' => 'receiver-router-cert-ref',
+    'descr' => 'HAProxy TLS router.example.invalid',
+];
+$freshMaterializedFrontends = rows(
+    $freshMaterializedConfig['OPNsense']['HAProxy']['frontends'],
+    'frontend'
+);
+foreach ($freshMaterializedFrontends as &$row) {
+    if (($row['name'] ?? '') === 'arcturus-shared-https') {
+        $row['ssl_certificates'] = 'receiver-arcturus-cert-ref,receiver-router-cert-ref';
+    }
+}
+unset($row);
+$freshMaterializedConfig['OPNsense']['HAProxy']['frontends'] = [
+    'frontend' => $freshMaterializedFrontends,
+];
+
+$freshFinal = HAProxySync::reconcile(
+    $freshMaterializedConfig,
+    $freshRecoveryPayload,
+    fn() => throw new RuntimeException('fresh final UUID factory should not run'),
+    fn() => throw new RuntimeException('fresh final id factory should not run')
+);
+eq(false, $freshFinal['changed'], 'fresh receiver final v4 reconcile is converged after materialization');
+
+eq(
+    null,
+    HAProxySync::bootstrapPayloadForMissingTLSIdentityFrontends(
+        $freshBootstrapConfig,
+        $freshRecoveryPayload
+    ),
+    'receiver with shared frontend does not need bootstrap staging'
+);
 
 $tlsIdentityReceiver = receiverBase();
 $receiverLocalFrontend = $tlsIdentityReceiver['OPNsense']['HAProxy']['frontends']['frontend'];
