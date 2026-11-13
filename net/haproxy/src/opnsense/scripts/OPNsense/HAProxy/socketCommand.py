@@ -6,6 +6,7 @@ import traceback
 
 from haproxy.conn import HaPConn
 from haproxy import cmds
+from runtimeCommands import UpdateSslCrt
 
 SOCKET = '/var/run/haproxy.socket'
 VALID_COMMANDS = {
@@ -25,7 +26,7 @@ VALID_COMMANDS = {
     "add-to-crt-list": cmds.addToSslCrtList,
     "del-from-crt-list": cmds.delFromSslCrtList,
     "new-ssl-cert": cmds.newSslCrt,
-    "update-ssl-cert": cmds.updateSslCrt,
+    "update-ssl-cert": UpdateSslCrt,
     "del-ssl-cert": cmds.delSslCrt,
     "commit-ssl-cert": cmds.commitSslCrt,
     "abort-ssl-cert": cmds.abortSslCrt,
