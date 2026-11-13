@@ -581,7 +581,15 @@ function reload_haproxy_runtime(Backend $backend): void
         ['1', 'yes', 'on'],
         true
     );
-    $backend->configdRun($enabled ? 'haproxy reload' : 'haproxy deploy');
+    $action = $enabled ? 'haproxy reload' : 'haproxy deploy';
+    $result = trim($backend->configdRun($action));
+    if ($result !== 'OK') {
+        fwrite(STDERR, sprintf(
+            "HAProxy configd action %s returned %s\n",
+            $action,
+            $result === '' ? '<empty>' : $result
+        ));
+    }
 }
 
 function require_haproxy_runtime_parity(Backend $backend): void

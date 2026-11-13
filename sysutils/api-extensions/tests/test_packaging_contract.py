@@ -34,6 +34,12 @@ class PackagingContractTests(unittest.TestCase):
         )
         self.assertIn(expected, ACTIONS.read_text())
 
+    def test_tls_identity_reconcile_preserves_structured_failure_output(self):
+        actions = ACTIONS.read_text()
+        section = actions.split("[haproxy_tls_identity_reconcile]", 1)[1]
+        self.assertIn("type:script_output", section)
+        self.assertIn("errors:no", section)
+
     def test_tls_identity_membership_change_reloads_haproxy_runtime(self):
         source = RECONCILER.read_text()
         self.assertIn("'membership_changed' => $membershipChanged", source)
@@ -44,10 +50,9 @@ class PackagingContractTests(unittest.TestCase):
             source,
         )
         self.assertIn("if ($membershipChanged) {", source)
-        self.assertIn(
-            "$backend->configdRun($enabled ? 'haproxy reload' : 'haproxy deploy');",
-            source,
-        )
+        self.assertIn("$action = $enabled ? 'haproxy reload' : 'haproxy deploy';", source)
+        self.assertIn("$result = trim($backend->configdRun($action));", source)
+        self.assertIn("HAProxy configd action %s returned %s", source)
         self.assertIn("$backend->configdRun('haproxy cert_sync_bulk');", source)
         self.assertIn(
             "apply_haproxy_runtime($configResult['membership_changed']);",
