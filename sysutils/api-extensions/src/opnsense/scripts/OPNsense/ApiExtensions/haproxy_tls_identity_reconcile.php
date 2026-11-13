@@ -626,9 +626,11 @@ function reconcile(bool $issue): array
 
     $configResult = import_and_bind($plan, $ready);
     try {
-        if ($configResult['changed'] || $changedSource) {
-            apply_haproxy_runtime($configResult['membership_changed']);
-        }
+        // Reconcile runtime state even when persistent config and source
+        // material are already converged. A previous interrupted reload can
+        // leave the generated crt-list correct while the running HAProxy
+        // process still lacks a managed certificate membership.
+        apply_haproxy_runtime($configResult['membership_changed']);
     } catch (Throwable $runtimeError) {
         rollback_haproxy_config($configResult['backup']);
         throw $runtimeError;
