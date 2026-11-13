@@ -87,6 +87,49 @@ final class HAProxyTLSIdentityMaterializer
         return false;
     }
 
+    private static function runtimeCertificateMetadata($value, string $field): array
+    {
+        if (!is_array($value)) {
+            throw new \InvalidArgumentException('invalid HAProxy runtime certificate ' . $field . ' metadata');
+        }
+        $result = [];
+        foreach (['Serial', 'Subject', 'Issuer'] as $name) {
+            if (!array_key_exists($name, $value) || !is_scalar($value[$name]) || trim((string)$value[$name]) === '') {
+                throw new \InvalidArgumentException('invalid HAProxy runtime certificate ' . $field . ' ' . $name);
+            }
+            $result[$name] = trim((string)$value[$name]);
+        }
+        return $result;
+    }
+
+    public static function runtimeContentChanged(array $diff): bool
+    {
+        foreach ($diff as $frontend => $row) {
+            if (!is_array($row)) {
+                throw new \InvalidArgumentException('invalid HAProxy runtime certificate diff for ' . (string)$frontend);
+            }
+            $certs = $row['certs'] ?? [];
+            if (!is_array($certs)) {
+                throw new \InvalidArgumentException('invalid HAProxy runtime certificate content map for ' . (string)$frontend);
+            }
+            foreach ($certs as $certificate => $state) {
+                if (!is_array($state)) {
+                    throw new \InvalidArgumentException('invalid HAProxy runtime certificate state for ' . (string)$certificate);
+                }
+                $remote = $state['remote'] ?? null;
+                if (is_array($remote) && ($remote['Status'] ?? null) === 'Empty') {
+                    return true;
+                }
+                $localMetadata = self::runtimeCertificateMetadata($state['local'] ?? null, 'local');
+                $remoteMetadata = self::runtimeCertificateMetadata($remote, 'remote');
+                if ($localMetadata !== $remoteMetadata) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public static function plan(array $config, string $realm): array
     {
         $realm = self::realm($realm);
