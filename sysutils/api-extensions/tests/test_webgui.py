@@ -92,6 +92,7 @@ class CarpHealthWebGuiTests(unittest.TestCase):
         self.assertIn("sync_validate", hook)
         self.assertIn("sync_prepare", hook)
         self.assertIn("sync_finalize", hook)
+        self.assertIn("sync_activate", hook)
         self.assertIn("api_extensions_sync_interfaces", hook)
         self.assertIn("api_extensions_sync_haproxy", hook)
         self.assertFalse((ROOT / "src/opnsense/scripts/OPNsense/ApiExtensions/config_sync_push.php").exists())

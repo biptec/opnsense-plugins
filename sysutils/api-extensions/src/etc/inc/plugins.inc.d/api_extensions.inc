@@ -45,7 +45,7 @@ function api_extensions_haproxy_sync_validate()
     return true;
 }
 
-function api_extensions_haproxy_sync_finalize()
+function api_extensions_haproxy_sync_activate()
 {
     global $config;
     $payload = HAProxySync::buildPayload($config);
@@ -77,7 +77,7 @@ function api_extensions_xmlrpc_sync()
             ),
             'id' => 'haproxy_objects',
             'sync_validate' => 'api_extensions_haproxy_sync_validate',
-            'sync_finalize' => 'api_extensions_haproxy_sync_finalize',
+            'sync_activate' => 'api_extensions_haproxy_sync_activate',
         ],
     ];
 }
