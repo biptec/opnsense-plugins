@@ -57,6 +57,9 @@ jobs:
       - name: Run HAProxy TLS identity tests
         run: php sysutils/api-extensions/tests/test_haproxy_tls_identity.php
 
+      - name: Run API extensions packaging contract tests
+        run: python3 -m unittest sysutils/api-extensions/tests/test_packaging_contract.py
+
       - name: Run mixed-version v2 HA synchronization tests
         run: php sysutils/api-extensions/tests/test_mixed_version_v2.php
 
