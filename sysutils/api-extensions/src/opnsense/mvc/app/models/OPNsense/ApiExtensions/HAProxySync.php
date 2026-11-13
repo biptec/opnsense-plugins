@@ -1151,6 +1151,7 @@ final class HAProxySync
             'ensure' => [],
             'remove' => [],
         ];
+        $managedCertificateDescriptionsByFrontend = [];
         if ($payload['version'] === self::VERSION) {
             $tlsIdentityPlan = HAProxyTLSIdentitySync::reconcile(
                 $config,
@@ -1158,6 +1159,17 @@ final class HAProxySync
                 $uuidFactory
             );
             $config = $tlsIdentityPlan['config'];
+            foreach ($payload['tls_identities'] as $identity) {
+                $frontendName = $identity['frontend_name'];
+                $managedCertificateDescriptionsByFrontend[$frontendName] ??= [];
+                $managedCertificateDescriptionsByFrontend[$frontendName][] =
+                    HAProxyTLSIdentitySync::certificateDescription($identity['dns_name']);
+            }
+            foreach ($managedCertificateDescriptionsByFrontend as &$descriptions) {
+                $descriptions = array_values(array_unique($descriptions));
+                sort($descriptions);
+            }
+            unset($descriptions);
         }
 
         $inventory = self::inventory($config);
@@ -1365,10 +1377,22 @@ final class HAProxySync
             }
 
             $certificateRefs = [];
+            $canonicalizeManagedCertificates = $payload['version'] === self::VERSION;
             foreach (self::decodeCertificateDescriptions(
                 (string)($data['sync_ssl_certificate_descriptions'] ?? '')
             ) as $description) {
+                if ($canonicalizeManagedCertificates &&
+                    HAProxyTLSIdentitySync::isManagedCertificateDescription($description)) {
+                    continue;
+                }
                 $certificateRefs[] = self::certificateRef($certificateIndex, $description);
+            }
+            if ($canonicalizeManagedCertificates) {
+                foreach ($managedCertificateDescriptionsByFrontend[$row['object_name']] ?? [] as $description) {
+                    $certificateRefs[] = self::certificateRef($certificateIndex, $description);
+                }
+                $certificateRefs = array_values(array_unique($certificateRefs));
+                sort($certificateRefs);
             }
             $defaultCertificateDescription = trim(
                 (string)($data['sync_ssl_default_certificate_description'] ?? '')

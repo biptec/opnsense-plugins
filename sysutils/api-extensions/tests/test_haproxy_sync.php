@@ -525,6 +525,40 @@ $freshMaterializedConfig['OPNsense']['HAProxy']['frontends'] = [
     'frontend' => $freshMaterializedFrontends,
 ];
 
+// Mixed-version sender: identity metadata is authoritative, but an older
+// sender frontend may still list only its legacy/default certificate. The
+// receiver must reconstruct managed certificate membership from tls_identities
+// and its node-local Trust object rather than dropping the materialized cert.
+$mixedVersionRecoverySource = $freshRecoverySource;
+foreach ($mixedVersionRecoverySource['OPNsense']['HAProxy']['frontends']['frontend'] as &$row) {
+    if (($row['name'] ?? '') === 'arcturus-shared-https') {
+        $row['ssl_certificates'] = 'source-arcturus-cert-ref';
+    }
+}
+unset($row);
+$mixedVersionRecoveryPayload = HAProxySync::buildPayload($mixedVersionRecoverySource);
+$mixedVersionFinal = HAProxySync::reconcile(
+    $freshMaterializedConfig,
+    $mixedVersionRecoveryPayload,
+    fn() => throw new RuntimeException('mixed-version final UUID factory should not run'),
+    fn() => throw new RuntimeException('mixed-version final id factory should not run')
+);
+eq(false, $mixedVersionFinal['changed'], 'v4 identity metadata preserves local managed frontend membership with old sender certificate list');
+$mixedVersionFrontends = rows($mixedVersionFinal['config']['OPNsense']['HAProxy']['frontends'], 'frontend');
+$mixedVersionSharedFrontend = null;
+foreach ($mixedVersionFrontends as $row) {
+    if (($row['name'] ?? '') === 'arcturus-shared-https') {
+        $mixedVersionSharedFrontend = $row;
+        break;
+    }
+}
+eq(true, is_array($mixedVersionSharedFrontend), 'mixed-version shared frontend remains present');
+eq(
+    'receiver-arcturus-cert-ref,receiver-router-cert-ref',
+    $mixedVersionSharedFrontend['ssl_certificates'],
+    'v4 identity metadata restores receiver-local managed certificate membership'
+);
+
 $freshFinal = HAProxySync::reconcile(
     $freshMaterializedConfig,
     $freshRecoveryPayload,
