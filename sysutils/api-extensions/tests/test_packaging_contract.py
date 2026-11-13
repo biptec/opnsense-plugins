@@ -34,6 +34,31 @@ class PackagingContractTests(unittest.TestCase):
         )
         self.assertIn(expected, ACTIONS.read_text())
 
+    def test_tls_identity_membership_change_reloads_haproxy_runtime(self):
+        source = RECONCILER.read_text()
+        self.assertIn("'membership_changed' => $membershipChanged", source)
+        self.assertIn("function apply_haproxy_runtime(bool $membershipChanged)", source)
+        self.assertIn("if (!$membershipChanged) {", source)
+        self.assertIn(
+            "HAProxyTLSIdentityMaterializer::runtimeMembershipChanged($runtimeDiff)",
+            source,
+        )
+        self.assertIn("if ($membershipChanged) {", source)
+        self.assertIn(
+            "$backend->configdRun($enabled ? 'haproxy reload' : 'haproxy deploy');",
+            source,
+        )
+        self.assertIn("$backend->configdRun('haproxy cert_sync_bulk');", source)
+        self.assertIn(
+            "apply_haproxy_runtime($configResult['membership_changed']);",
+            source,
+        )
+        self.assertNotIn(
+            "if ($configResult['changed'] || $changedSource)",
+            source,
+            "runtime parity must be checked even when persistent TLS identity state is already converged",
+        )
+
     def test_haproxy_sync_activates_only_after_native_sync_phases(self):
         source = SYNC_PLUGIN.read_text()
         self.assertIn("function api_extensions_haproxy_sync_activate()", source)

@@ -51,6 +51,42 @@ final class HAProxyTLSIdentityMaterializer
         return self::CERT_DIR . '/' . self::fileToken($dnsName) . '.key';
     }
 
+    private static function runtimeCertificatePaths($value, string $field): array
+    {
+        if (!is_array($value) || !array_is_list($value)) {
+            throw new \InvalidArgumentException('invalid HAProxy runtime certificate ' . $field . ' list');
+        }
+        $paths = [];
+        foreach ($value as $path) {
+            if (!is_scalar($path) || trim((string)$path) === '') {
+                throw new \InvalidArgumentException('invalid HAProxy runtime certificate path in ' . $field);
+            }
+            $paths[] = trim((string)$path);
+        }
+        $paths = array_values(array_unique($paths));
+        sort($paths);
+        return $paths;
+    }
+
+    public static function runtimeMembershipChanged(array $diff): bool
+    {
+        foreach ($diff as $frontend => $row) {
+            if (!is_array($row)) {
+                throw new \InvalidArgumentException('invalid HAProxy runtime certificate diff for ' . (string)$frontend);
+            }
+            $local = self::runtimeCertificatePaths($row['local_certs'] ?? [], 'local');
+            $remote = self::runtimeCertificatePaths($row['remote_certs'] ?? [], 'remote');
+            if ($local !== $remote) {
+                return true;
+            }
+            if (trim((string)($row['local_default'] ?? '')) !==
+                trim((string)($row['remote_default'] ?? ''))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static function plan(array $config, string $realm): array
     {
         $realm = self::realm($realm);
