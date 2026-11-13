@@ -71,6 +71,7 @@ function api_extensions_sync_haproxy_xmlrpc($payload)
     $configLocked = false;
     $materializerChanged = false;
     $metadataChanged = false;
+    $bootstrapGraphChanged = false;
     $graphChanged = false;
 
     try {
@@ -78,6 +79,45 @@ function api_extensions_sync_haproxy_xmlrpc($payload)
         $configHandle = Config::getInstance();
 
         if ($validatedPayload['version'] === HAProxySync::VERSION) {
+            // A fresh secondary may receive the Core-owned TLS frontend and a
+            // synchronized identity referencing it in the same v4 payload.
+            // Stage that graph first using only pre-existing receiver-local
+            // certificate descriptions. Identity-managed certificates remain
+            // excluded until the local materializer issues/imports them.
+            $bootstrapPayload = HAProxySync::bootstrapPayloadForMissingTLSIdentityFrontends(
+                $config,
+                $validatedPayload
+            );
+            if ($bootstrapPayload !== null) {
+                $configHandle->lock();
+                $configLocked = true;
+
+                $bootstrapResult = HAProxySync::reconcile(
+                    $config,
+                    $bootstrapPayload,
+                    fn() => generate_uuid(),
+                    fn() => uniqid('', true)
+                );
+                $bootstrapGraphChanged = $bootstrapResult['changed'];
+                if ($bootstrapGraphChanged) {
+                    $config = $bootstrapResult['config'];
+                    $saved = write_config(
+                        'Stage synchronized HAProxy frontend before TLS identity materialization'
+                    );
+                    if ($saved === false || $saved === -1) {
+                        throw new \RuntimeException(
+                            'unable to save staged HAProxy frontend synchronization'
+                        );
+                    }
+                    $savedNewConfig = true;
+                }
+
+                $configHandle->unlock();
+                $configLocked = false;
+                $configHandle->forceReload();
+                $config = $configHandle->toArray();
+            }
+
             // Phase 1: persist only non-secret receiver-local policy/identity
             // metadata. Do not hold the OPNsense config lock while invoking
             // configd: the child materializer needs the same lock.
@@ -132,9 +172,10 @@ function api_extensions_sync_haproxy_xmlrpc($payload)
             fn() => generate_uuid(),
             fn() => uniqid('', true)
         );
-        $graphChanged = $result['changed'];
+        $finalGraphChanged = $result['changed'];
+        $graphChanged = $bootstrapGraphChanged || $finalGraphChanged;
 
-        if ($graphChanged) {
+        if ($finalGraphChanged) {
             $config = $result['config'];
             $saved = write_config('Synchronize policy-managed HAProxy objects from HA primary');
             if ($saved === false || $saved === -1) {

@@ -980,6 +980,106 @@ final class HAProxySync
         return $validated;
     }
 
+    public static function bootstrapPayloadForMissingTLSIdentityFrontends(
+        array $config,
+        $payload
+    ): ?array {
+        $validated = self::validatePayload($payload);
+        if ($validated['version'] !== self::VERSION || $validated['tls_identities'] === []) {
+            return null;
+        }
+
+        $localFrontends = [];
+        foreach (self::haProxyRows($config, 'frontend') as $row) {
+            $localFrontends[self::objectName($row['name'] ?? '')] = true;
+        }
+
+        $missing = [];
+        foreach ($validated['tls_identities'] as $identity) {
+            if (!isset($localFrontends[$identity['frontend_name']])) {
+                $missing[$identity['frontend_name']] = true;
+            }
+        }
+        if ($missing === []) {
+            return null;
+        }
+
+        $incomingFrontends = [];
+        foreach ($validated['objects'] as $row) {
+            if ($row['object_type'] === 'frontend') {
+                $incomingFrontends[$row['object_name']] = true;
+            }
+        }
+        foreach (array_keys($missing) as $frontendName) {
+            if (!isset($incomingFrontends[$frontendName])) {
+                self::fail(
+                    'HAProxy TLS identity references missing local frontend ' . $frontendName .
+                    ' and the incoming HAProxy payload does not define it'
+                );
+            }
+        }
+
+        $managedDescriptions = [];
+        foreach ($validated['tls_identities'] as $identity) {
+            $managedDescriptions[$identity['frontend_name']] ??= [];
+            $managedDescriptions[$identity['frontend_name']][
+                HAProxyTLSIdentitySync::certificateDescription($identity['dns_name'])
+            ] = true;
+        }
+
+        $bootstrap = $validated;
+        $bootstrap['version'] = self::FRONTEND_VERSION;
+        unset($bootstrap['tls_identities']);
+
+        foreach ($bootstrap['objects'] as &$row) {
+            if ($row['object_type'] !== 'frontend' || !isset($missing[$row['object_name']])) {
+                continue;
+            }
+
+            $data =& $row['data'];
+            $descriptions = self::decodeCertificateDescriptions(
+                (string)($data['sync_ssl_certificate_descriptions'] ?? '')
+            );
+            $identityDescriptions = $managedDescriptions[$row['object_name']] ?? [];
+            $defaultDescription = trim(
+                (string)($data['sync_ssl_default_certificate_description'] ?? '')
+            );
+
+            if ($defaultDescription !== '' && isset($identityDescriptions[$defaultDescription])) {
+                self::fail(
+                    'fresh HAProxy receiver frontend ' . $row['object_name'] .
+                    ' requires a pre-existing non-identity default certificate'
+                );
+            }
+
+            $descriptions = array_values(array_filter(
+                $descriptions,
+                fn($description) => !isset($identityDescriptions[$description])
+            ));
+            if (self::flag($data['ssl_enabled'] ?? null) && $descriptions === []) {
+                self::fail(
+                    'fresh HAProxy receiver frontend ' . $row['object_name'] .
+                    ' requires at least one pre-existing certificate description'
+                );
+            }
+            if ($defaultDescription !== '' && !in_array($defaultDescription, $descriptions, true)) {
+                self::fail(
+                    'fresh HAProxy receiver frontend ' . $row['object_name'] .
+                    ' default certificate must be available before TLS identity materialization'
+                );
+            }
+
+            $data['sync_ssl_certificate_descriptions'] = json_encode(
+                $descriptions,
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
+            );
+            unset($data);
+        }
+        unset($row);
+
+        return $bootstrap;
+    }
+
     private static function assignmentRowsRaw(array $config): array
     {
         $root = self::policyRoot($config);
