@@ -516,6 +516,45 @@ function cleanup_orphans(array $plan): void
     }
 }
 
+function haproxy_runtime_diff(Backend $backend): array
+{
+    $rawDiff = trim($backend->configdRun('haproxy cert_diff_bulk'));
+    try {
+        $runtimeDiff = json_decode($rawDiff, true, 512, JSON_THROW_ON_ERROR);
+    } catch (JsonException $error) {
+        fail('HAProxy runtime certificate diff returned invalid JSON: ' . $error->getMessage());
+    }
+    if (!is_array($runtimeDiff)) {
+        fail('HAProxy runtime certificate diff returned an invalid payload');
+    }
+    return $runtimeDiff;
+}
+
+function haproxy_runtime_changed(array $runtimeDiff): bool
+{
+    return HAProxyTLSIdentityMaterializer::runtimeMembershipChanged($runtimeDiff) ||
+        HAProxyTLSIdentityMaterializer::runtimeContentChanged($runtimeDiff);
+}
+
+function reload_haproxy_runtime(Backend $backend): void
+{
+    $config = Config::getInstance();
+    $config->forceReload();
+    $enabled = in_array(
+        (string)($config->object()->OPNsense->HAProxy->general->enabled ?? ''),
+        ['1', 'yes', 'on'],
+        true
+    );
+    $backend->configdRun($enabled ? 'haproxy reload' : 'haproxy deploy');
+}
+
+function require_haproxy_runtime_parity(Backend $backend): void
+{
+    if (haproxy_runtime_changed(haproxy_runtime_diff($backend))) {
+        fail('HAProxy runtime certificate state remains stale after TLS identity reconciliation');
+    }
+}
+
 function apply_haproxy_runtime(bool $membershipChanged): void
 {
     $backend = new Backend();
@@ -525,37 +564,36 @@ function apply_haproxy_runtime(bool $membershipChanged): void
         fail('HAProxy configuration failed validation after TLS identity reconciliation: ' . preg_replace('/\s+/', ' ', $test));
     }
 
+    $runtimeDiff = haproxy_runtime_diff($backend);
+    $membershipChanged = $membershipChanged ||
+        HAProxyTLSIdentityMaterializer::runtimeMembershipChanged($runtimeDiff);
+    $contentChanged = HAProxyTLSIdentityMaterializer::runtimeContentChanged($runtimeDiff);
+
     // HAProxy's runtime certificate API can replace certificate contents that
     // are already loaded, but it cannot add or remove crt-list membership. A
-    // membership change therefore needs a normal reload so the new frontend
-    // certificate set is activated. Pure renewal/content changes retain the
-    // zero-downtime runtime certificate sync path.
-    if (!$membershipChanged) {
-        $rawDiff = trim($backend->configdRun('haproxy cert_diff_bulk'));
-        try {
-            $runtimeDiff = json_decode($rawDiff, true, 512, JSON_THROW_ON_ERROR);
-        } catch (JsonException $error) {
-            fail('HAProxy runtime certificate diff returned invalid JSON: ' . $error->getMessage());
-        }
-        if (!is_array($runtimeDiff)) {
-            fail('HAProxy runtime certificate diff returned an invalid payload');
-        }
-        $membershipChanged = HAProxyTLSIdentityMaterializer::runtimeMembershipChanged($runtimeDiff);
+    // membership/default change therefore needs a normal reload. Pure renewal
+    // first uses the zero-downtime Runtime API path, but command completion is
+    // not accepted as proof: cert_sync_bulk can return successfully while the
+    // running certificate serial remains stale. Verify the actual runtime
+    // postcondition and fall back to a normal graceful reload only when the hot
+    // sync did not converge.
+    if ($membershipChanged) {
+        reload_haproxy_runtime($backend);
+        require_haproxy_runtime_parity($backend);
+        return;
     }
 
-    if ($membershipChanged) {
-        $config = Config::getInstance();
-        $config->forceReload();
-        $enabled = in_array(
-            (string)($config->object()->OPNsense->HAProxy->general->enabled ?? ''),
-            ['1', 'yes', 'on'],
-            true
-        );
-        $backend->configdRun($enabled ? 'haproxy reload' : 'haproxy deploy');
+    if (!$contentChanged) {
         return;
     }
 
     $backend->configdRun('haproxy cert_sync_bulk');
+    if (!haproxy_runtime_changed(haproxy_runtime_diff($backend))) {
+        return;
+    }
+
+    reload_haproxy_runtime($backend);
+    require_haproxy_runtime_parity($backend);
 }
 
 function rollback_haproxy_config(?string $backup): void

@@ -11,6 +11,7 @@ from typing import List
 
 from haproxy.conn import HaPConn
 from haproxy import cmds
+from runtimeCommands import UpdateSslCrt
 
 
 class SyncWithTarget:
@@ -276,7 +277,7 @@ class Diff(SyncWithTarget):
                     output = self._execute_remote_cmd(cmds.newSslCrt, certfile=cert['certfile'])
                     messages.append(output)
 
-                output = self._execute_remote_cmd(cmds.updateSslCrt, certfile=cert['certfile'], payload=cert['pem'])
+                output = self._execute_remote_cmd(UpdateSslCrt, certfile=cert['certfile'], payload=cert['pem'])
                 messages.append(output)
 
                 output = self._execute_remote_cmd(cmds.commitSslCrt, certfile=cert['certfile'])

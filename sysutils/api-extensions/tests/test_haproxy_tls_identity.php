@@ -258,4 +258,39 @@ tlsBad(
     'runtime certificate diff rejects malformed membership lists'
 );
 
+$contentParity = [
+    'frontend-a' => [
+        'certs' => [
+            'cert-a' => [
+                'local' => [
+                    'Serial' => '01',
+                    'Subject' => '/CN=a.example.invalid',
+                    'Issuer' => '/CN=Example CA',
+                ],
+                'remote' => [
+                    'Serial' => '01',
+                    'Subject' => '/CN=a.example.invalid',
+                    'Issuer' => '/CN=Example CA',
+                ],
+            ],
+        ],
+    ],
+];
+tlsEq(false, HAProxyTLSIdentityMaterializer::runtimeContentChanged($contentParity), 'runtime certificate content parity is converged');
+
+$contentSerialDrift = $contentParity;
+$contentSerialDrift['frontend-a']['certs']['cert-a']['remote']['Serial'] = '02';
+tlsEq(true, HAProxyTLSIdentityMaterializer::runtimeContentChanged($contentSerialDrift), 'runtime certificate serial drift requires reconciliation');
+
+$contentMissing = $contentParity;
+$contentMissing['frontend-a']['certs']['cert-a']['remote'] = ['Status' => 'Empty'];
+tlsEq(true, HAProxyTLSIdentityMaterializer::runtimeContentChanged($contentMissing), 'runtime empty certificate slot requires reconciliation');
+
+tlsBad(
+    fn() => HAProxyTLSIdentityMaterializer::runtimeContentChanged([
+        'frontend-a' => ['certs' => 'not-a-map'],
+    ]),
+    'runtime certificate diff rejects malformed content maps'
+);
+
 echo "ok\n";
