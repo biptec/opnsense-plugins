@@ -120,6 +120,12 @@ final class HAProxyTLSIdentityMaterializer
                 if (is_array($remote) && ($remote['Status'] ?? null) === 'Empty') {
                     return true;
                 }
+                if (is_array($remote) && array_key_exists('error', $remote)) {
+                    if (!is_scalar($remote['error']) || trim((string)$remote['error']) === '') {
+                        throw new \InvalidArgumentException('invalid HAProxy runtime certificate remote error');
+                    }
+                    return true;
+                }
                 $localMetadata = self::runtimeCertificateMetadata($state['local'] ?? null, 'local');
                 $remoteMetadata = self::runtimeCertificateMetadata($remote, 'remote');
                 if ($localMetadata !== $remoteMetadata) {

@@ -286,6 +286,26 @@ $contentMissing = $contentParity;
 $contentMissing['frontend-a']['certs']['cert-a']['remote'] = ['Status' => 'Empty'];
 tlsEq(true, HAProxyTLSIdentityMaterializer::runtimeContentChanged($contentMissing), 'runtime empty certificate slot requires reconciliation');
 
+$contentNotLoaded = $contentParity;
+$contentNotLoaded['frontend-a']['certs']['cert-a']['remote'] = [
+    'error' => "Can't display the certificate: Not found or the certificate is a bundle!",
+];
+tlsEq(true, HAProxyTLSIdentityMaterializer::runtimeContentChanged($contentNotLoaded), 'runtime certificate lookup error requires reconciliation');
+
+tlsBad(
+    fn() => HAProxyTLSIdentityMaterializer::runtimeContentChanged([
+        'frontend-a' => [
+            'certs' => [
+                'cert-a' => [
+                    'local' => $contentParity['frontend-a']['certs']['cert-a']['local'],
+                    'remote' => ['error' => []],
+                ],
+            ],
+        ],
+    ]),
+    'runtime certificate diff rejects malformed remote errors'
+);
+
 tlsBad(
     fn() => HAProxyTLSIdentityMaterializer::runtimeContentChanged([
         'frontend-a' => ['certs' => 'not-a-map'],
