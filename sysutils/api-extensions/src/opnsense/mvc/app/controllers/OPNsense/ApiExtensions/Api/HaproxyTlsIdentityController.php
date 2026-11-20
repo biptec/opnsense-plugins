@@ -175,6 +175,34 @@ class HaproxyTlsIdentityController extends ApiMutableModelControllerBase
         }
     }
 
+    public function preflightAction(): array
+    {
+        if (!$this->request->isPost()) {
+            return ['status' => 'failed', 'message' => 'POST required'];
+        }
+        $posted = $this->postedIdentity();
+        if ($posted === null) {
+            return ['status' => 'failed', 'message' => 'identity must be an object'];
+        }
+        try {
+            $registration = $this->normalizedRegistration($posted);
+            $raw = trim((new Backend())->configdRun(
+                'api_extensions haproxy_tls_identity_preflight ' . escapeshellarg($registration['dns_name'])
+            ));
+            $decoded = json_decode($raw, true);
+            if (!is_array($decoded)) {
+                return [
+                    'status' => 'failed',
+                    'message' => 'HAProxy TLS identity preflight returned invalid JSON',
+                    'result' => $raw,
+                ];
+            }
+            return $decoded;
+        } catch (\Throwable $error) {
+            return ['status' => 'failed', 'message' => $error->getMessage()];
+        }
+    }
+
     public function reconfigureAction(): array
     {
         if (!$this->request->isPost()) {

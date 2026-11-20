@@ -40,6 +40,23 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("type:script_output", section)
         self.assertIn("errors:no", section)
 
+    def test_tls_identity_preflight_is_registered_as_read_only_configd_action(self):
+        actions = ACTIONS.read_text()
+        section = actions.split("[haproxy_tls_identity_preflight]", 1)[1].split("[haproxy_tls_identity_reconcile]", 1)[0]
+        self.assertIn("haproxy_tls_identity_reconcile.php preflight %s", section)
+        self.assertIn("parameters:%s", section)
+        self.assertIn("type:script_output", section)
+        self.assertIn("errors:no", section)
+
+    def test_tls_identity_preflight_checks_dns_and_exact_freeipa_principal_before_issuance(self):
+        source = RECONCILER.read_text()
+        self.assertIn("GETENT_BIN, 'hosts', $dnsName", source)
+        self.assertIn("IPA_BIN,\n                'service-find', '--principal=' . $servicePrincipal", source)
+        self.assertIn("HAProxyTLSIdentityPreflight::serviceFindContainsPrincipal", source)
+        batch_preflight = source.index("preflight_identity_names($needsPreflight);")
+        first_issuance = source.index("ensure_source($item, $postsave, $sourceMatches[$item['dns_name']])")
+        self.assertLess(batch_preflight, first_issuance)
+
     def test_tls_identity_membership_change_reloads_haproxy_runtime(self):
         source = RECONCILER.read_text()
         self.assertIn("'membership_changed' => $membershipChanged", source)
