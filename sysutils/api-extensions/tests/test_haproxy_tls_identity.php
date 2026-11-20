@@ -2,8 +2,10 @@
 require_once __DIR__ . '/../src/opnsense/mvc/app/models/OPNsense/ApiExtensions/InterfaceSync.php';
 require_once __DIR__ . '/../src/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxyTLSIdentitySync.php';
 require_once __DIR__ . '/../src/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxyTLSIdentityMaterializer.php';
+require_once __DIR__ . '/../src/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxyTLSIdentityPreflight.php';
 
 use OPNsense\ApiExtensions\HAProxyTLSIdentityMaterializer;
+use OPNsense\ApiExtensions\HAProxyTLSIdentityPreflight;
 use OPNsense\ApiExtensions\HAProxyTLSIdentitySync;
 
 function tlsEq($expected, $actual, string $message): void
@@ -311,6 +313,48 @@ tlsBad(
         'frontend-a' => ['certs' => 'not-a-map'],
     ]),
     'runtime certificate diff rejects malformed content maps'
+);
+
+$serviceFindOutput = <<<TEXT
+krbprincipalname: HAPROXY/arcturus.svc.sandbox.biptec.net@CENTRAL.SANDBOX.BIPTEC.NET
+krbprincipalname: HAPROXY/s3.central.sandbox.biptec.net@CENTRAL.SANDBOX.BIPTEC.NET
+Number of entries returned 1
+TEXT;
+tlsEq(
+    true,
+    HAProxyTLSIdentityPreflight::serviceFindContainsPrincipal(
+        $serviceFindOutput,
+        'HAPROXY/s3.central.sandbox.biptec.net@CENTRAL.SANDBOX.BIPTEC.NET'
+    ),
+    'FreeIPA service search recognizes an exact principal alias'
+);
+tlsEq(
+    false,
+    HAProxyTLSIdentityPreflight::serviceFindContainsPrincipal(
+        $serviceFindOutput,
+        'HAPROXY/s3.central.sandbox.biptec.net.evil@CENTRAL.SANDBOX.BIPTEC.NET'
+    ),
+    'FreeIPA service search does not accept a principal-name substring'
+);
+tlsEq(
+    true,
+    HAProxyTLSIdentityPreflight::dnsLookupSucceeded(0, "10.0.16.82 s3.central.sandbox.biptec.net\n"),
+    'DNS preflight accepts a resolved IPv4 service address'
+);
+tlsEq(
+    true,
+    HAProxyTLSIdentityPreflight::dnsLookupSucceeded(0, "2a07:e580:a11:1050::2 s3.central.sandbox.biptec.net\n"),
+    'DNS preflight accepts a resolved IPv6 service address'
+);
+tlsEq(
+    false,
+    HAProxyTLSIdentityPreflight::dnsLookupSucceeded(2, ''),
+    'DNS preflight rejects an unresolved service name'
+);
+tlsEq(
+    false,
+    HAProxyTLSIdentityPreflight::dnsLookupSucceeded(0, "127.0.0.1 s3.central.sandbox.biptec.net\n"),
+    'DNS preflight rejects a loopback-only service result'
 );
 
 echo "ok\n";

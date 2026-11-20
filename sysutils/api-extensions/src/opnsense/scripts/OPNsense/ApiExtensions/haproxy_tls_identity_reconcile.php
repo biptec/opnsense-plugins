@@ -6,14 +6,22 @@ require_once 'util.inc';
 require_once 'script/load_phalcon.php';
 require_once '/usr/local/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxyTLSIdentitySync.php';
 require_once '/usr/local/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxyTLSIdentityMaterializer.php';
+require_once '/usr/local/opnsense/mvc/app/models/OPNsense/ApiExtensions/HAProxyTLSIdentityPreflight.php';
 
 use OPNsense\ApiExtensions\HAProxyTLSIdentityMaterializer;
+use OPNsense\ApiExtensions\HAProxyTLSIdentityPreflight;
+use OPNsense\ApiExtensions\HAProxyTLSIdentitySync;
 use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
 
 const IPA_CONFIG = '/usr/local/etc/ipa/default.conf';
 const IPA_CA = '/usr/local/etc/ipa/ca.crt';
 const SYSTEM_CA = '/usr/local/etc/ssl/cert.pem';
+const IPA_KEYTAB = '/etc/krb5.keytab';
+const IPA_BIN = '/usr/local/bin/ipa';
+const KINIT_BIN = '/usr/local/bin/kinit';
+const KDESTROY_BIN = '/usr/local/bin/kdestroy';
+const GETENT_BIN = '/usr/bin/getent';
 const CERT_DIR = '/usr/local/etc/api-extensions/haproxy-tls';
 const MANAGED_DESCRIPTION_PREFIX = 'HAProxy TLS ';
 
@@ -62,6 +70,95 @@ function ipa_realm(): string
         }
     }
     fail('FreeIPA realm is missing from client configuration');
+}
+
+function ipa_host(): string
+{
+    if (!is_file(IPA_CONFIG)) {
+        fail('FreeIPA client configuration is missing');
+    }
+    foreach (file(IPA_CONFIG, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+        if (preg_match('/^\s*host\s*=\s*(\S+)\s*$/', $line, $match)) {
+            return strtolower(rtrim($match[1], '.'));
+        }
+    }
+    fail('FreeIPA host is missing from client configuration');
+}
+
+function preflight_identity_names(array $dnsNames): array
+{
+    $dnsNames = array_values(array_unique(array_map(
+        static function ($name): string {
+            $name = strtolower(rtrim(trim((string)$name), '.'));
+            HAProxyTLSIdentitySync::certificateDescription($name);
+            return $name;
+        },
+        $dnsNames
+    )));
+    sort($dnsNames);
+    if ($dnsNames === []) {
+        return ['status' => 'ok', 'count' => 0, 'identities' => []];
+    }
+
+    $keytab = getenv('CORE_ROUTER_IPA_KEYTAB') ?: IPA_KEYTAB;
+    foreach ([IPA_CONFIG, IPA_CA, SYSTEM_CA, $keytab] as $path) {
+        if (!is_file($path) || !is_readable($path) || filesize($path) === 0) {
+            fail('required FreeIPA TLS identity dependency is missing or unreadable: ' . $path);
+        }
+    }
+
+    $realm = ipa_realm();
+    $host = ipa_host();
+
+    $caPem = (string)file_get_contents(IPA_CA);
+    $ca = openssl_x509_parse($caPem);
+    if (!is_array($ca) || (int)($ca['validTo_time_t'] ?? 0) <= time()) {
+        fail('FreeIPA CA certificate is invalid or expired: ' . IPA_CA);
+    }
+
+    $cacheDirectory = sys_get_temp_dir() . '/core-router-ipa-preflight-' . bin2hex(random_bytes(8));
+    if (!mkdir($cacheDirectory, 0700)) {
+        fail('unable to create private Kerberos cache directory for FreeIPA preflight');
+    }
+    chmod($cacheDirectory, 0700);
+    $cache = $cacheDirectory . '/krb5cc';
+    $cacheEnv = 'KRB5CCNAME=FILE:' . $cache;
+    $ipaEnv = 'IPA_CONFDIR=/usr/local/etc/ipa';
+
+    try {
+        $hostPrincipal = 'host/' . $host . '@' . $realm;
+        run_command(['/usr/bin/env', $cacheEnv, KINIT_BIN, '-k', '-t', $keytab, $hostPrincipal]);
+        run_command(['/usr/bin/env', $cacheEnv, $ipaEnv, IPA_BIN, 'ping']);
+
+        $checked = [];
+        foreach ($dnsNames as $dnsName) {
+            $lookup = run_command([GETENT_BIN, 'hosts', $dnsName], true);
+            if (!HAProxyTLSIdentityPreflight::dnsLookupSucceeded($lookup['code'], $lookup['stdout'])) {
+                fail('DNS name ' . $dnsName . ' does not resolve to a service address from this Router; apply the owning FreeIPA DNS record before HAProxy TLS identity provisioning');
+            }
+
+            $servicePrincipal = 'HAPROXY/' . $dnsName . '@' . $realm;
+            $service = run_command([
+                '/usr/bin/env', $cacheEnv, $ipaEnv, IPA_BIN,
+                'service-find', '--principal=' . $servicePrincipal, '--all', '--raw',
+            ], true);
+            if ($service['code'] !== 0) {
+                $detail = trim($service['stderr']);
+                fail('unable to verify FreeIPA service principal ' . $servicePrincipal .
+                    ($detail !== '' ? ': ' . $detail : ''));
+            }
+            if (!HAProxyTLSIdentityPreflight::serviceFindContainsPrincipal($service['stdout'], $servicePrincipal)) {
+                fail('FreeIPA service principal alias ' . $servicePrincipal . ' is missing; apply the owning FreeIPA service-identity stage before Router TLS identity provisioning');
+            }
+            $checked[] = ['dns_name' => $dnsName, 'principal' => $servicePrincipal];
+        }
+
+        return ['status' => 'ok', 'count' => count($checked), 'identities' => $checked];
+    } finally {
+        run_command(['/usr/bin/env', $cacheEnv, KDESTROY_BIN], true);
+        @unlink($cache);
+        @rmdir($cacheDirectory);
+    }
 }
 
 function certificate_names(string $pem): array
@@ -191,7 +288,7 @@ function ensure_postsave_tracking(array $item, string $postsave): bool
     return true;
 }
 
-function source_matches(array $item): bool
+function source_matches(array $item, ?string $ocsp = null): bool
 {
     $certPath = $item['certificate_path'];
     $keyPath = $item['key_path'];
@@ -224,7 +321,7 @@ function source_matches(array $item): bool
             return false;
         }
     }
-    return ocsp_status($certPath) === 'good' && tracking_matches($item);
+    return ($ocsp ?? ocsp_status($certPath)) === 'good' && tracking_matches($item);
 }
 
 function ensure_private_key(string $path): void
@@ -246,16 +343,22 @@ function ensure_private_key(string $path): void
     @chgrp($path, 'wheel');
 }
 
-function ensure_source(array $item, string $postsave): bool
+function source_needs_reconcile(array $item): bool
 {
     $certPath = $item['certificate_path'];
+    $ocsp = null;
     if (is_file($certPath) && filesize($certPath) > 0) {
         $ocsp = ocsp_status($certPath);
         if ($ocsp === 'unknown') {
             fail('unable to determine revocation status for ' . $item['dns_name'] . '; refusing certificate churn');
         }
     }
-    if (source_matches($item)) {
+    return !source_matches($item, $ocsp);
+}
+
+function ensure_source(array $item, string $postsave, bool $sourceMatches): bool
+{
+    if ($sourceMatches) {
         return ensure_postsave_tracking($item, $postsave);
     }
 
@@ -675,9 +778,26 @@ function reconcile(bool $issue): array
     $plan = HAProxyTLSIdentityMaterializer::plan($config->toArray(), $realm);
     $changedSource = false;
     if ($issue) {
+        // Determine the complete issuance set first. Verify every DNS name and
+        // FreeIPA principal before creating keys, certmonger requests or files
+        // for any identity, so one missing prerequisite cannot leave a partial
+        // certificate-materialization run.
+        $sourceMatches = [];
+        $needsPreflight = [];
+        foreach ($plan as $item) {
+            $matches = !source_needs_reconcile($item);
+            $sourceMatches[$item['dns_name']] = $matches;
+            if (!$matches) {
+                $needsPreflight[] = $item['dns_name'];
+            }
+        }
+        if ($needsPreflight !== []) {
+            preflight_identity_names($needsPreflight);
+        }
+
         $postsave = '/usr/local/opnsense/scripts/OPNsense/ApiExtensions/haproxy_tls_identity_reconcile.php postsave';
         foreach ($plan as $item) {
-            $changedSource = ensure_source($item, $postsave) || $changedSource;
+            $changedSource = ensure_source($item, $postsave, $sourceMatches[$item['dns_name']]) || $changedSource;
         }
     } else {
         foreach ($plan as $item) {
@@ -732,10 +852,18 @@ function reconcile(bool $issue): array
 
 $mode = $argv[1] ?? 'reconcile';
 try {
-    if (!in_array($mode, ['reconcile', 'postsave'], true)) {
-        fail('usage: haproxy_tls_identity_reconcile.php [reconcile|postsave]');
+    if ($mode === 'preflight') {
+        $dnsName = $argv[2] ?? '';
+        if ($dnsName === '') {
+            fail('usage: haproxy_tls_identity_reconcile.php preflight <dns-name>');
+        }
+        $result = preflight_identity_names([$dnsName]);
+    } else {
+        if (!in_array($mode, ['reconcile', 'postsave'], true)) {
+            fail('usage: haproxy_tls_identity_reconcile.php [reconcile|postsave|preflight <dns-name>]');
+        }
+        $result = reconcile($mode === 'reconcile');
     }
-    $result = reconcile($mode === 'reconcile');
     echo json_encode($result, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
     exit(0);
 } catch (Throwable $error) {
