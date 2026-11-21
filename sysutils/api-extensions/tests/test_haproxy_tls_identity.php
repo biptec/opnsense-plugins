@@ -338,23 +338,41 @@ tlsEq(
 );
 tlsEq(
     true,
-    HAProxyTLSIdentityPreflight::dnsLookupSucceeded(0, "10.0.16.82 s3.central.sandbox.biptec.net\n"),
-    'DNS preflight accepts a resolved IPv4 service address'
+    HAProxyTLSIdentityPreflight::dnsHostLookupSucceeded(
+        0,
+        "s3.central.sandbox.biptec.net is an alias for garage.svc.sandbox.biptec.net.\n" .
+        "garage.svc.sandbox.biptec.net has address 10.0.16.74\n"
+    ),
+    'DNS preflight accepts a fresh non-recursive IPv4 service address through a CNAME'
 );
 tlsEq(
     true,
-    HAProxyTLSIdentityPreflight::dnsLookupSucceeded(0, "2a07:e580:a11:1050::2 s3.central.sandbox.biptec.net\n"),
-    'DNS preflight accepts a resolved IPv6 service address'
+    HAProxyTLSIdentityPreflight::dnsHostLookupSucceeded(
+        0,
+        "garage.svc.sandbox.biptec.net has IPv6 address 2a07:e580:a11:1048::2\n"
+    ),
+    'DNS preflight accepts a fresh non-recursive IPv6 service address'
 );
 tlsEq(
     false,
-    HAProxyTLSIdentityPreflight::dnsLookupSucceeded(2, ''),
+    HAProxyTLSIdentityPreflight::dnsHostLookupSucceeded(1, "Host missing.example not found: 3(NXDOMAIN)\n"),
     'DNS preflight rejects an unresolved service name'
 );
 tlsEq(
     false,
-    HAProxyTLSIdentityPreflight::dnsLookupSucceeded(0, "127.0.0.1 s3.central.sandbox.biptec.net\n"),
+    HAProxyTLSIdentityPreflight::dnsHostLookupSucceeded(
+        0,
+        "loopback.example has address 127.0.0.1\nloopback.example has IPv6 address ::1\n"
+    ),
     'DNS preflight rejects a loopback-only service result'
+);
+tlsEq(
+    false,
+    HAProxyTLSIdentityPreflight::dnsHostLookupSucceeded(
+        0,
+        "s3.central.sandbox.biptec.net is an alias for garage.svc.sandbox.biptec.net.\n"
+    ),
+    'DNS preflight rejects a CNAME without a resolved service address'
 );
 
 echo "ok\n";
