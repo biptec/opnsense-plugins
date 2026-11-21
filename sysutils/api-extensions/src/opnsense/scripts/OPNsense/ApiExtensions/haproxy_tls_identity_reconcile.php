@@ -594,11 +594,13 @@ function import_and_bind(array $plan, array $ready): array
         }
 
         $removeIndexes = [];
-        foreach ($cfg->cert as $index => $candidate) {
+        $certificateIndex = 0;
+        foreach ($cfg->cert as $candidate) {
             $dns = managed_certificate_dns($candidate);
             if ($dns !== null && !isset($desiredByDNS[$dns])) {
-                $removeIndexes[] = (int)$index;
+                $removeIndexes[] = $certificateIndex;
             }
+            $certificateIndex++;
         }
         rsort($removeIndexes);
         foreach ($removeIndexes as $index) {

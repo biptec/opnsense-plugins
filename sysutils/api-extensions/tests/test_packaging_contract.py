@@ -63,6 +63,14 @@ class PackagingContractTests(unittest.TestCase):
         first_issuance = source.index("ensure_source($item, $postsave, $sourceMatches[$item['dns_name']])")
         self.assertLess(batch_preflight, first_issuance)
 
+    def test_tls_identity_cleanup_uses_numeric_sibling_positions(self):
+        source = RECONCILER.read_text()
+        self.assertIn("$certificateIndex = 0;", source)
+        self.assertIn("$removeIndexes[] = $certificateIndex;", source)
+        self.assertIn("$certificateIndex++;", source)
+        self.assertNotIn("foreach ($cfg->cert as $index => $candidate)", source)
+        self.assertNotIn("$removeIndexes[] = (int)$index;", source)
+
     def test_tls_identity_membership_change_reloads_haproxy_runtime(self):
         source = RECONCILER.read_text()
         self.assertIn("'membership_changed' => $membershipChanged", source)
