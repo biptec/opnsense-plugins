@@ -54,7 +54,9 @@ class PackagingContractTests(unittest.TestCase):
 
     def test_tls_identity_preflight_checks_dns_and_exact_freeipa_principal_before_issuance(self):
         source = RECONCILER.read_text()
-        self.assertIn("GETENT_BIN, 'hosts', $dnsName", source)
+        self.assertIn("HOST_BIN, '-r', '-W', '2', '-t', $recordType, $dnsName", source)
+        self.assertNotIn("GETENT_BIN", source)
+        self.assertIn("HAProxyTLSIdentityPreflight::dnsHostLookupSucceeded", source)
         self.assertIn("IPA_BIN,\n                'service-find', '--principal=' . $servicePrincipal", source)
         self.assertIn("HAProxyTLSIdentityPreflight::serviceFindContainsPrincipal", source)
         batch_preflight = source.index("preflight_identity_names($needsPreflight);")

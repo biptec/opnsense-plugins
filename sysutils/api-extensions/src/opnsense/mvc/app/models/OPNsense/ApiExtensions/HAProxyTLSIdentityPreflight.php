@@ -7,18 +7,17 @@ namespace OPNsense\ApiExtensions;
  */
 final class HAProxyTLSIdentityPreflight
 {
-    public static function dnsLookupSucceeded(int $exitCode, string $stdout): bool
+    public static function dnsHostLookupSucceeded(int $exitCode, string $stdout): bool
     {
         if ($exitCode !== 0 || trim($stdout) === '') {
             return false;
         }
 
         foreach (preg_split('/\\R+/', trim($stdout)) ?: [] as $line) {
-            $parts = preg_split('/\\s+/', trim($line)) ?: [];
-            if ($parts === []) {
+            if (!preg_match('/\\shas (?:IPv6 )?address\\s+(\\S+)\\s*$/i', trim($line), $match)) {
                 continue;
             }
-            $address = trim((string)$parts[0]);
+            $address = trim((string)$match[1]);
             if (filter_var($address, FILTER_VALIDATE_IP) === false) {
                 continue;
             }

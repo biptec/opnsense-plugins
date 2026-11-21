@@ -21,7 +21,7 @@ const IPA_KEYTAB = '/etc/krb5.keytab';
 const IPA_BIN = '/usr/local/bin/ipa';
 const KINIT_BIN = '/usr/local/bin/kinit';
 const KDESTROY_BIN = '/usr/local/bin/kdestroy';
-const GETENT_BIN = '/usr/bin/getent';
+const HOST_BIN = '/usr/local/bin/host';
 const CERT_DIR = '/usr/local/etc/api-extensions/haproxy-tls';
 const MANAGED_DESCRIPTION_PREFIX = 'HAProxy TLS ';
 
@@ -132,9 +132,23 @@ function preflight_identity_names(array $dnsNames): array
 
         $checked = [];
         foreach ($dnsNames as $dnsName) {
-            $lookup = run_command([GETENT_BIN, 'hosts', $dnsName], true);
-            if (!HAProxyTLSIdentityPreflight::dnsLookupSucceeded($lookup['code'], $lookup['stdout'])) {
-                fail('DNS name ' . $dnsName . ' does not resolve to a service address from this Router; apply the owning FreeIPA DNS record before HAProxy TLS identity provisioning');
+            $dnsReady = false;
+            foreach (['A', 'AAAA'] as $recordType) {
+                // The normal recursive path may still hold the NXDOMAIN produced by an
+                // earlier failed preflight after FreeIPA has created and transferred the
+                // record. RD=0 uses the existing dnsdist authoritative-zone path and
+                // therefore checks the current transferred authority without mutating or
+                // flushing shared resolver caches.
+                $lookup = run_command([
+                    HOST_BIN, '-r', '-W', '2', '-t', $recordType, $dnsName,
+                ], true);
+                if (HAProxyTLSIdentityPreflight::dnsHostLookupSucceeded($lookup['code'], $lookup['stdout'])) {
+                    $dnsReady = true;
+                    break;
+                }
+            }
+            if (!$dnsReady) {
+                fail('DNS name ' . $dnsName . ' does not resolve to a service address from this Router authoritative DNS path; apply the owning FreeIPA DNS record and allow the DNS handoff to converge before HAProxy TLS identity provisioning');
             }
 
             $servicePrincipal = 'HAPROXY/' . $dnsName . '@' . $realm;
