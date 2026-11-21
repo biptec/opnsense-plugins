@@ -43,7 +43,11 @@ class PackagingContractTests(unittest.TestCase):
     def test_tls_identity_preflight_is_registered_as_read_only_configd_action(self):
         actions = ACTIONS.read_text()
         section = actions.split("[haproxy_tls_identity_preflight]", 1)[1].split("[haproxy_tls_identity_reconcile]", 1)[0]
-        self.assertIn("haproxy_tls_identity_reconcile.php preflight %s", section)
+        self.assertIn(
+            "command:/usr/local/opnsense/scripts/OPNsense/ApiExtensions/haproxy_tls_identity_reconcile.php preflight\n",
+            section,
+        )
+        self.assertNotIn("haproxy_tls_identity_reconcile.php preflight %s", section)
         self.assertIn("parameters:%s", section)
         self.assertIn("type:script_output", section)
         self.assertIn("errors:no", section)
