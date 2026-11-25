@@ -16,7 +16,6 @@ STATE_PATH = "/var/run/api_extensions_carp_health.json"
 ARPING = "/usr/local/sbin/arping"
 CONFIGCTL = "/usr/local/sbin/configctl"
 IFCONFIG = "/sbin/ifconfig"
-NETSTAT = "/usr/bin/netstat"
 ROUTE = "/sbin/route"
 FAILOVER_ADV_SKEW = 254
 
@@ -243,8 +242,11 @@ def probe_all(config, probe_func=probe):
     for check in config.checks:
         representatives.setdefault((check.device, check.target), check)
     unique_checks = list(representatives.values())
-    with ThreadPoolExecutor(max_workers=min(16, len(unique_checks))) as executor:
-        values = list(executor.map(probe_func, unique_checks))
+    if len(unique_checks) == 1:
+        values = [probe_func(unique_checks[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=min(16, len(unique_checks))) as executor:
+            values = list(executor.map(probe_func, unique_checks))
     by_target = {
         (check.device, check.target): value
         for check, value in zip(unique_checks, values)
@@ -512,43 +514,6 @@ def reset_vhid_overrides(state, command_func=run_command):
     return success
 
 
-def _route_snapshot_key(destination, family):
-    try:
-        if destination == "default":
-            destination = "::/0" if family == "inet6" else "0.0.0.0/0"
-        if "/" in destination:
-            return str(ipaddress.ip_network(destination, strict=False))
-        address = ipaddress.ip_address(destination.split("%", 1)[0])
-        prefix = 128 if address.version == 6 else 32
-        return str(ipaddress.ip_network(f"{address}/{prefix}", strict=False))
-    except ValueError:
-        return ""
-
-
-def parse_route_snapshot(output, family):
-    routes = {}
-    for line in output.splitlines():
-        fields = line.split()
-        if len(fields) < 2 or fields[0] in {"Destination", "Routing", "Internet:", "Internet6:"}:
-            continue
-        destination = _route_snapshot_key(fields[0], family)
-        if not destination:
-            continue
-        gateway = fields[1]
-        routes[(family, destination)] = "" if gateway.startswith("link#") else gateway
-    return routes
-
-
-def read_route_snapshot(families, command_func=run_command):
-    routes = {}
-    for family in sorted(set(families)):
-        returncode, output = command_func([NETSTAT, "-rnW", "-f", family], capture=True)
-        if returncode != 0:
-            return None
-        routes.update(parse_route_snapshot(output, family))
-    return routes
-
-
 def _route_command(action, family, destination, gateway=None, route_type="host"):
     command = [ROUTE, "-n", action]
     if family == "inet6":
@@ -559,24 +524,12 @@ def _route_command(action, family, destination, gateway=None, route_type="host")
     return command
 
 
-def read_route_gateway(destination, family, command_func=run_command, route_type="host", route_snapshot=None):
-    if route_snapshot is not None:
-        return route_snapshot.get((family, _route_snapshot_key(destination, family)), "")
+def read_route_gateway(destination, family, command_func=run_command, route_type="host"):
     returncode, output = command_func(_route_command("get", family, destination, route_type=route_type), capture=True)
     if returncode != 0:
         return ""
     match = re.search(r"^\s*gateway:\s*(\S+)", output, re.MULTILINE)
     return match.group(1) if match else ""
-
-
-def update_route_snapshot(route_snapshot, destination, family, gateway):
-    if route_snapshot is None:
-        return
-    key = (family, _route_snapshot_key(destination, family))
-    if gateway:
-        route_snapshot[key] = gateway
-    else:
-        route_snapshot.pop(key, None)
 
 
 def _fallback_specs(check):
@@ -608,21 +561,6 @@ def _fallback_specs(check):
     return specs
 
 
-def route_snapshot_families(config, previous_state=None):
-    families = {
-        family
-        for check in config.checks
-        for family, _route_type, _destination, _gateway, _trigger in _fallback_specs(check)
-    }
-    if isinstance(previous_state, dict):
-        families.update(
-            str(item.get("family", "inet"))
-            for item in previous_state.get("routes", [])
-            if isinstance(item, dict)
-        )
-    return tuple(sorted(family for family in families if family in {"inet", "inet6"}))
-
-
 def _backup_default_allowed(check, config, vhids, previous_state=None):
     if check.scope == "global":
         return False
@@ -645,9 +583,7 @@ def _backup_default_allowed(check, config, vhids, previous_state=None):
     return True
 
 
-def reconcile_fallback_routes(
-    config, tracker, previous_state=None, command_func=run_command, vhids=None, route_snapshot=None
-):
+def reconcile_fallback_routes(config, tracker, previous_state=None, command_func=run_command, vhids=None):
     previous = previous_state if isinstance(previous_state, dict) else {}
     previous_items = previous.get("routes", []) if isinstance(previous.get("routes", []), list) else []
     previous_by_key = {item.get("key"): item for item in previous_items if item.get("key")}
@@ -681,23 +617,11 @@ def reconcile_fallback_routes(
             continue
         managed = bool(old.get("managed", False))
         route_type = str(old.get("route_type", "host"))
-        gateway_now = read_route_gateway(
-            str(old.get("destination", "")),
-            str(old.get("family", "inet")),
-            command_func,
-            route_type,
-            route_snapshot,
-        )
+        gateway_now = read_route_gateway(str(old.get("destination", "")), str(old.get("family", "inet")), command_func, route_type)
         control_ok = True
         if managed and gateway_now == old.get("gateway"):
             command_func(_route_command("delete", str(old.get("family", "inet")), str(old.get("destination", "")), str(old.get("gateway", "")), route_type), capture=False)
             gateway_now = read_route_gateway(str(old.get("destination", "")), str(old.get("family", "inet")), command_func, route_type)
-            update_route_snapshot(
-                route_snapshot,
-                str(old.get("destination", "")),
-                str(old.get("family", "inet")),
-                gateway_now,
-            )
             control_ok = gateway_now != old.get("gateway")
         if not control_ok:
             retired = dict(old)
@@ -713,23 +637,19 @@ def reconcile_fallback_routes(
         ):
             old = {}
         managed = bool(old.get("managed", False))
-        gateway_now = read_route_gateway(
-            spec["destination"], spec["family"], command_func, spec["route_type"], route_snapshot
-        )
+        gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func, spec["route_type"])
         if spec["desired_installed"]:
             if gateway_now != spec["gateway"]:
                 rc, _ = command_func(_route_command("add", spec["family"], spec["destination"], spec["gateway"], spec["route_type"]), capture=False)
                 if rc == 0:
                     managed = True
                 gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func, spec["route_type"])
-                update_route_snapshot(route_snapshot, spec["destination"], spec["family"], gateway_now)
             installed = gateway_now == spec["gateway"]
             control_ok = installed
         else:
             if managed and gateway_now == spec["gateway"]:
                 command_func(_route_command("delete", spec["family"], spec["destination"], spec["gateway"], spec["route_type"]), capture=False)
                 gateway_now = read_route_gateway(spec["destination"], spec["family"], command_func, spec["route_type"])
-                update_route_snapshot(route_snapshot, spec["destination"], spec["family"], gateway_now)
             installed = gateway_now == spec["gateway"]
             control_ok = not (managed and installed)
             if control_ok:

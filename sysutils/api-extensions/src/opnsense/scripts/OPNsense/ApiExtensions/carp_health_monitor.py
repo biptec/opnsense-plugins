@@ -13,11 +13,9 @@ from carp_health import (
     load_config,
     probe_all,
     read_carp_runtime_snapshot,
-    read_route_snapshot,
     read_state,
     reconcile_fallback_routes,
     reconcile_vhid_scopes,
-    route_snapshot_families,
     reset_fallback_routes,
     reset_vhid_overrides,
     status_state,
@@ -83,11 +81,8 @@ def run_loop():
             results = probe_all(config)
             ready, healthy = tracker.update(config.checks, results)
         runtime_snapshot = read_carp_runtime_snapshot()
-        route_snapshot = read_route_snapshot(route_snapshot_families(config, previous_state))
         vhids = reconcile_vhid_scopes(config, tracker, previous_state, runtime_snapshot=runtime_snapshot)
-        routes = reconcile_fallback_routes(
-            config, tracker, previous_state, vhids=vhids, route_snapshot=route_snapshot
-        )
+        routes = reconcile_fallback_routes(config, tracker, previous_state, vhids=vhids)
         state = build_state(config, tracker, ready, healthy, vhids=vhids, routes=routes)
         write_state(state)
         global_state = state.get("global", {})

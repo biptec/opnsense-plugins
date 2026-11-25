@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 MODULE = Path(__file__).parents[1] / "src/opnsense/scripts/OPNsense/ApiExtensions/carp_health.py"
 spec = importlib.util.spec_from_file_location("carp_health", MODULE)
@@ -172,7 +173,9 @@ class CarpHealthTests(unittest.TestCase):
             calls.append((check.device, check.target))
             return True
 
-        self.assertEqual(carp_health.probe_all(config, fake_probe), {"a": True, "b": True})
+        with mock.patch.object(carp_health, "ThreadPoolExecutor") as executor:
+            self.assertEqual(carp_health.probe_all(config, fake_probe), {"a": True, "b": True})
+            executor.assert_not_called()
         self.assertEqual(calls, [("vlan02", "192.0.2.2")])
 
     def test_carp_runtime_snapshot_parses_all_vhids_from_one_ifconfig(self):
@@ -189,62 +192,34 @@ vlan03: flags=8943<UP> metric 0 mtu 1500
             },
         )
 
-    def test_route_snapshot_parses_exact_ipv4_and_ipv6_routes(self):
-        ipv4 = """Routing tables
+    def test_carp_runtime_snapshot_avoids_per_vhid_ifconfig_in_steady_state(self):
+        config = self.make_config(failure=1, recovery=1)
+        tracker = carp_health.HealthTracker(1, 1)
+        tracker.update(config.checks, {"abc": True})
+        commands = FakeCommands()
+        runtime_snapshot = {("vlan02", 51): {"state": "MASTER", "advskew": 10}}
+        vhids = carp_health.reconcile_vhid_scopes(
+            config, tracker, command_func=commands, runtime_snapshot=runtime_snapshot
+        )
+        self.assertTrue(all(row["control_ok"] for row in vhids))
+        self.assertFalse(any(call[0] == carp_health.IFCONFIG for call in commands.calls))
 
-Internet:
-Destination        Gateway            Flags     Netif Expire
-0.0.0.0/1          10.16.224.6        UGS      vlan3803
-128.0.0.0/1        10.16.224.6        UGS      vlan3803
-192.0.2.228         10.16.224.6        UGHS     vlan3803
-"""
-        ipv6 = """Internet6:
-Destination                       Gateway                       Flags     Netif Expire
-::/1                              2a07:e580:a10:e004::2         UGS      vlan3803
-8000::/1                          2a07:e580:a10:e004::2         UGS      vlan3803
-"""
-        routes = carp_health.parse_route_snapshot(ipv4, "inet")
-        routes.update(carp_health.parse_route_snapshot(ipv6, "inet6"))
-        self.assertEqual(routes[("inet", "0.0.0.0/1")], "10.16.224.6")
-        self.assertEqual(routes[("inet", "128.0.0.0/1")], "10.16.224.6")
-        self.assertEqual(routes[("inet", "192.0.2.228/32")], "10.16.224.6")
-        self.assertEqual(routes[("inet6", "::/1")], "2a07:e580:a10:e004::2")
-        self.assertEqual(routes[("inet6", "8000::/1")], "2a07:e580:a10:e004::2")
-
-    def test_steady_state_snapshots_avoid_per_object_ifconfig_and_route_get(self):
+    def test_carp_runtime_snapshot_refreshes_after_priority_mutation(self):
         checks = """
-<check uuid="wan"><enabled>1</enabled><name>wan-owner</name><interface>opt2</interface><target>192.0.2.1</target>
-<scope>vhid</scope><vhid>51</vhid><failure_advskew>254</failure_advskew>
-<backup_ipv4_default_gateway>10.16.224.6</backup_ipv4_default_gateway>
-<backup_ipv6_default_gateway>2001:db8:2::2</backup_ipv6_default_gateway></check>"""
+<check uuid="abc"><enabled>1</enabled><name>leaf</name><interface>opt2</interface>
+<target>192.0.2.2</target><scope>vhid</scope><vhid>51</vhid><failure_advskew>254</failure_advskew></check>"""
         config = self.make_config(checks, failure=1, recovery=1)
         tracker = carp_health.HealthTracker(1, 1)
-        tracker.update(config.checks, {"wan": True})
+        tracker.update(config.checks, {"abc": False})
         commands = FakeCommands()
-        commands.runtime["vlan02"][51]["state"] = "BACKUP"
-
-        first_vhids = carp_health.reconcile_vhid_scopes(config, tracker, command_func=commands)
-        first_routes = carp_health.reconcile_fallback_routes(
-            config, tracker, {"vhids": first_vhids}, commands, first_vhids
-        )
-        previous = {"vhids": first_vhids, "routes": first_routes}
-        runtime_snapshot = {("vlan02", 51): {"state": "BACKUP", "advskew": 10}}
-        route_snapshot = {
-            ("inet", "0.0.0.0/1"): "10.16.224.6",
-            ("inet", "128.0.0.0/1"): "10.16.224.6",
-            ("inet6", "::/1"): "2001:db8:2::2",
-            ("inet6", "8000::/1"): "2001:db8:2::2",
-        }
-        commands.calls.clear()
+        snapshot = {("vlan02", 51): {"state": "MASTER", "advskew": 10}}
         vhids = carp_health.reconcile_vhid_scopes(
-            config, tracker, previous, commands, runtime_snapshot=runtime_snapshot
+            config, tracker, command_func=commands, runtime_snapshot=snapshot
         )
-        routes = carp_health.reconcile_fallback_routes(
-            config, tracker, previous, commands, vhids, route_snapshot=route_snapshot
-        )
-        self.assertTrue(all(row["control_ok"] for row in vhids + routes))
-        self.assertFalse(any(call[0] == carp_health.IFCONFIG for call in commands.calls))
-        self.assertFalse(any(call[0] == carp_health.ROUTE and "get" in call for call in commands.calls))
+        self.assertEqual(commands.runtime["vlan02"][51]["advskew"], 254)
+        self.assertEqual(vhids[0]["current_advskew"], 254)
+        self.assertTrue(vhids[0]["control_ok"])
+        self.assertTrue(any(call[0] == carp_health.IFCONFIG for call in commands.calls))
 
     def test_hard_failure_does_not_force_master_to_backup(self):
         checks = """
