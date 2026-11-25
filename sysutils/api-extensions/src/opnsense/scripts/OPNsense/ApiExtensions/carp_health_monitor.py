@@ -7,13 +7,17 @@ import sys
 import time
 
 from carp_health import (
+    CONFIG_PATH,
     HealthTracker,
     build_state,
     load_config,
     probe_all,
+    read_carp_runtime_snapshot,
+    read_route_snapshot,
     read_state,
     reconcile_fallback_routes,
     reconcile_vhid_scopes,
+    route_snapshot_families,
     reset_fallback_routes,
     reset_vhid_overrides,
     status_state,
@@ -23,6 +27,21 @@ from carp_health import (
 
 SUPERVISOR_PID = "/var/run/api_extensions_carp_health.supervisor.pid"
 _stop = False
+
+
+def config_file_stamp(path=CONFIG_PATH):
+    stat = os.stat(path)
+    return (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size)
+
+
+def load_cached_config(cache, path=CONFIG_PATH):
+    stamp = config_file_stamp(path)
+    if cache.get("stamp") == stamp and cache.get("config") is not None:
+        return cache["config"]
+    config = load_config(path)
+    cache["stamp"] = stamp
+    cache["config"] = config
+    return config
 
 
 def reconcile_service_status(global_report, last_global):
@@ -44,10 +63,11 @@ def run_loop():
     signature = None
     tracker = None
     last_global = None
+    config_cache = {}
     while not _stop:
         started = time.monotonic()
         try:
-            config = load_config()
+            config = load_cached_config(config_cache)
         except Exception:
             time.sleep(1)
             continue
@@ -62,8 +82,12 @@ def run_loop():
         else:
             results = probe_all(config)
             ready, healthy = tracker.update(config.checks, results)
-        vhids = reconcile_vhid_scopes(config, tracker, previous_state)
-        routes = reconcile_fallback_routes(config, tracker, previous_state, vhids=vhids)
+        runtime_snapshot = read_carp_runtime_snapshot()
+        route_snapshot = read_route_snapshot(route_snapshot_families(config, previous_state))
+        vhids = reconcile_vhid_scopes(config, tracker, previous_state, runtime_snapshot=runtime_snapshot)
+        routes = reconcile_fallback_routes(
+            config, tracker, previous_state, vhids=vhids, route_snapshot=route_snapshot
+        )
         state = build_state(config, tracker, ready, healthy, vhids=vhids, routes=routes)
         write_state(state)
         global_state = state.get("global", {})

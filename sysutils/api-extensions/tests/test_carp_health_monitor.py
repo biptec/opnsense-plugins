@@ -14,6 +14,24 @@ spec.loader.exec_module(carp_health_monitor)
 
 
 class CarpHealthMonitorTests(unittest.TestCase):
+    def test_config_cache_reuses_unchanged_config_and_reloads_changed_file(self):
+        first = object()
+        second = object()
+        cache = {}
+        with mock.patch.object(
+            carp_health_monitor,
+            "config_file_stamp",
+            side_effect=[(1, 2, 3, 4), (1, 2, 3, 4), (1, 2, 5, 4)],
+        ), mock.patch.object(
+            carp_health_monitor,
+            "load_config",
+            side_effect=[first, second],
+        ) as load:
+            self.assertIs(carp_health_monitor.load_cached_config(cache), first)
+            self.assertIs(carp_health_monitor.load_cached_config(cache), first)
+            self.assertIs(carp_health_monitor.load_cached_config(cache), second)
+            self.assertEqual(load.call_count, 2)
+
     def test_service_status_retries_until_trigger_succeeds(self):
         report = (False, True, True)
         with mock.patch.object(
