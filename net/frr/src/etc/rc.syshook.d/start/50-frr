@@ -32,7 +32,11 @@ require_once('config.inc');
 require_once('util.inc');
 require_once('plugins.inc.d/frr.inc');
 
+if (mwexecfm('/usr/local/opnsense/scripts/frr/carp_connected_migrate.py') !== 0) {
+    log_msg('FRR CARP legacy fallback migration failed; refusing FRR startup reconciliation', LOG_ERR);
+    exit(75);
+}
+
 if (frr_enabled()) {
     mwexecfm('/usr/local/opnsense/scripts/frr/carp_event_handler');
-    mwexecfm('/usr/local/opnsense/scripts/frr/carp_connected_control.sh', ['start']);
 }

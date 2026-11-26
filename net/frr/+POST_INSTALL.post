@@ -1,0 +1,5 @@
+#!/bin/sh
+
+if ! /usr/local/opnsense/scripts/frr/carp_connected_migrate.py; then
+    logger -t os-frr "FRR CARP legacy fallback migration remains pending; next FRR start/restart is fail-closed"
+fi
