@@ -1,7 +1,7 @@
 #!/usr/local/bin/python3
 """One-shot migration from the removed CARP connected-route polling monitor.
 
-The legacy monitor owned only routes recorded in STATE_PATH.  During an
+The legacy monitor owned only routes recorded in STATE_PATH. During an
 in-place upgrade this helper stops any surviving legacy monitor, removes only
 an exact kernel route whose gateway still matches the recorded owned fallback,
 and deletes the volatile state once no owned route remains.
@@ -18,6 +18,13 @@ import time
 STATE_PATH = "/var/run/frr_carp_connected_fallback.json"
 SUPERVISOR_PID = "/var/run/frr_carp_connected_monitor.supervisor.pid"
 CHILD_PID = "/var/run/frr_carp_connected_monitor.child.pid"
+LEGACY_FILES = (
+    "/usr/local/opnsense/scripts/frr/carp_connected_control.sh",
+    "/usr/local/opnsense/scripts/frr/carp_connected_monitor.py",
+    "/usr/local/opnsense/scripts/frr/lib/events/connected.py",
+    "/usr/local/etc/rc.syshook.d/stop/50-frr",
+)
+PROCESS_MARKER = "carp_connected_monitor.py"
 
 
 def _run(args):
@@ -36,36 +43,84 @@ def _process_command(pid, command_func=_run):
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def _stop_pidfile(path, command_func=_run, kill_func=os.kill, sleep_func=time.sleep):
-    pid = _read_pid(path)
-    if pid is None:
-        return True
-    command = _process_command(pid, command_func)
-    if command and "carp_connected_monitor.py" not in command and "frr_carp_connected" not in command:
-        return False
-    if command:
+def _child_pids(pid, command_func=_run):
+    result = command_func(["/bin/pgrep", "-P", str(pid)])
+    if result.returncode not in (0, 1):
+        return []
+    children = []
+    for value in result.stdout.split():
         try:
-            kill_func(pid, signal.SIGTERM)
+            children.append(int(value))
+        except ValueError:
+            continue
+    return children
+
+
+def _owned_supervisor(pid, command_func=_run):
+    command = _process_command(pid, command_func)
+    if not command:
+        return False, []
+    if PROCESS_MARKER in command or "frr_carp_connected" in command:
+        return True, []
+    children = _child_pids(pid, command_func)
+    owned = [child for child in children if PROCESS_MARKER in _process_command(child, command_func)]
+    return bool(owned), owned
+
+
+def _terminate_owned_pid(pid, command_func=_run, kill_func=os.kill, sleep_func=time.sleep):
+    command = _process_command(pid, command_func)
+    if not command or PROCESS_MARKER not in command:
+        return True
+    try:
+        kill_func(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    for _ in range(50):
+        if not _process_command(pid, command_func):
+            return True
+        sleep_func(0.1)
+    return False
+
+
+def stop_legacy_monitor(command_func=_run, kill_func=os.kill, sleep_func=time.sleep):
+    supervisor = _read_pid(SUPERVISOR_PID)
+    owned_children = []
+    if supervisor is not None:
+        owned, owned_children = _owned_supervisor(supervisor, command_func)
+        if not owned:
+            return False
+        try:
+            kill_func(supervisor, signal.SIGTERM)
         except ProcessLookupError:
             pass
         for _ in range(50):
-            if not _process_command(pid, command_func):
+            if not _process_command(supervisor, command_func):
                 break
             sleep_func(0.1)
         else:
             return False
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+
+    child = _read_pid(CHILD_PID)
+    if child is not None:
+        owned_children.append(child)
+    for pid in sorted(set(owned_children)):
+        if not _terminate_owned_pid(pid, command_func, kill_func, sleep_func):
+            return False
+
+    for path in (SUPERVISOR_PID, CHILD_PID):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
     return True
 
 
-def stop_legacy_monitor(command_func=_run, kill_func=os.kill, sleep_func=time.sleep):
-    # Stop the supervisor first so it cannot respawn the child, then the child.
-    ok = _stop_pidfile(SUPERVISOR_PID, command_func, kill_func, sleep_func)
-    ok = _stop_pidfile(CHILD_PID, command_func, kill_func, sleep_func) and ok
-    return ok
+def cleanup_legacy_files(remove_func=os.unlink):
+    for path in LEGACY_FILES:
+        try:
+            remove_func(path)
+        except FileNotFoundError:
+            pass
 
 
 def load_state(path=STATE_PATH):
@@ -104,7 +159,6 @@ def delete_owned_route(route, command_func=_run):
     current = route_lookup(route, command_func)
     gateway = str(route.get("gateway", ""))
     if current is None or current.get("gateway") != gateway:
-        # The recorded fallback no longer exists; never delete an unrelated path.
         return True
     family = int(route.get("family", 0))
     network = str(route.get("network", ""))
@@ -149,7 +203,10 @@ def migrate(state_path=STATE_PATH, command_func=_run):
 def main():
     if not stop_legacy_monitor():
         return 75
-    return migrate()
+    result = migrate()
+    if result == 0:
+        cleanup_legacy_files()
+    return result
 
 
 if __name__ == "__main__":

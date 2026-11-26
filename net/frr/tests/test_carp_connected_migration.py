@@ -35,6 +35,27 @@ class CommandStub:
         raise AssertionError(args)
 
 
+class ProcessStub:
+    def __init__(self, supervisor_command, child_command="", child_pid=200):
+        self.supervisor_command = supervisor_command
+        self.child_command = child_command
+        self.child_pid = child_pid
+
+    def __call__(self, args):
+        if args[:2] == ["/bin/ps", "-p"]:
+            pid = int(args[2])
+            if pid == 100:
+                return SimpleNamespace(returncode=0, stdout=self.supervisor_command + "\n")
+            if pid == self.child_pid and self.child_command:
+                return SimpleNamespace(returncode=0, stdout=self.child_command + "\n")
+            return SimpleNamespace(returncode=1, stdout="")
+        if args[:2] == ["/bin/pgrep", "-P"]:
+            if int(args[2]) == 100 and self.child_command:
+                return SimpleNamespace(returncode=0, stdout=f"{self.child_pid}\n")
+            return SimpleNamespace(returncode=1, stdout="")
+        raise AssertionError(args)
+
+
 class MigrationTests(unittest.TestCase):
     def write_state(self, routes):
         tmp = tempfile.NamedTemporaryFile("w", delete=False)
@@ -68,6 +89,24 @@ class MigrationTests(unittest.TestCase):
         tmp.write("{broken")
         tmp.close()
         self.assertEqual(migrate.migrate(tmp.name, CommandStub(None)), 75)
+
+    def test_hidden_daemon_title_is_owned_via_monitor_child(self):
+        stub = ProcessStub(
+            "daemon: /usr/local/bin/python3[200] (daemon)",
+            "/usr/local/bin/python3 /usr/local/opnsense/scripts/frr/carp_connected_monitor.py",
+        )
+        owned, children = migrate._owned_supervisor(100, stub)
+        self.assertTrue(owned)
+        self.assertEqual(children, [200])
+
+    def test_unrelated_daemon_pid_is_never_claimed(self):
+        stub = ProcessStub(
+            "daemon: /usr/local/bin/python3[200] (daemon)",
+            "/usr/local/bin/python3 /usr/local/bin/unrelated.py",
+        )
+        owned, children = migrate._owned_supervisor(100, stub)
+        self.assertFalse(owned)
+        self.assertEqual(children, [])
 
 
 if __name__ == "__main__":
