@@ -1,0 +1,13 @@
+#!/bin/sh
+CONTROL=/usr/local/opnsense/scripts/OPNsense/ApiExtensions/carp_health_control.sh
+
+if ! "${CONTROL}" restart; then
+    logger -t os-api-extensions "CARP health daemon migration/restart failed"
+    exit 1
+fi
+
+rm -f \
+    /usr/local/opnsense/scripts/OPNsense/ApiExtensions/carp_health_monitor.py \
+    /usr/local/opnsense/scripts/OPNsense/ApiExtensions/carp_health.py
+
+exit 0

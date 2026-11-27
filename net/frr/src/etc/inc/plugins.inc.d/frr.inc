@@ -59,21 +59,42 @@ function frr_staticroutes_configure($verbose = false)
     service_log("done.\n", $verbose);
 }
 
-function frr_route_lookup($address, $family)
+function frr_carp_route_barrier($address, $family, $endpoint_interface, $type)
 {
-    $output = shell_safe('/sbin/route -n get -%s %s', [$family, $address]);
-    if (!is_string($output) || $output === '') {
+    if (!in_array($family, ['inet', 'inet6'], true) ||
+        !in_array($type, ['MASTER', 'BACKUP'], true) ||
+        !is_ipaddr(strtok((string)$address, '%')) ||
+        empty($endpoint_interface)) {
         return null;
     }
 
-    $route = ['gateway' => '', 'interface' => ''];
-    foreach (preg_split('/\r?\n/', $output) as $line) {
-        if (preg_match('/^\s*(gateway|interface):\s*(\S+)/', $line, $matches)) {
-            $route[$matches[1]] = $matches[2];
-        }
+    // Subscribe-before-snapshot inside the helper closes the CARP-notification
+    // race: CARP devd/syshook can run before the kernel/FRR route transition is
+    // complete.  The helper waits on PF_ROUTE events and checks only this
+    // endpoint gateway.  The 30 second bound preserves the incumbent OSPF
+    // reconvergence grace without a recurring route-table scan or sleep loop.
+    $output = shell_safe(
+        '/usr/local/bin/python3 /usr/local/opnsense/scripts/frr/carp_route_barrier.py ' .
+        '--family %s --address %s --endpoint-interface %s --state %s --timeout 30',
+        [$family, $address, $endpoint_interface, $type]
+    );
+    $result = json_decode((string)$output, true);
+    if (!is_array($result) ||
+        ($result['status'] ?? '') !== 'ok' ||
+        empty($result['interface'])) {
+        log_msg(sprintf(
+            'FRR CARP %s route convergence timed out for %s via endpoint interface %s',
+            $type,
+            $address,
+            $endpoint_interface
+        ), LOG_WARNING);
+        return null;
     }
 
-    return $route['interface'] !== '' ? $route : null;
+    return [
+        'gateway' => (string)($result['gateway'] ?? ''),
+        'interface' => (string)$result['interface'],
+    ];
 }
 
 function frr_carp_staticroutes_reconcile($subsystem, $type)
@@ -122,6 +143,7 @@ function frr_carp_staticroutes_reconcile($subsystem, $type)
     ), LOG_NOTICE);
 
     $gateways = (new \OPNsense\Routing\Gateways())->gatewaysIndexedByName(false, true);
+    $route_barriers = [];
     foreach (get_staticroutes(false) as $route) {
         $gateway = $gateways[$route['gateway']] ?? null;
         if (!is_array($gateway) || ($gateway['interface'] ?? '') !== $interface) {
@@ -148,25 +170,42 @@ function frr_carp_staticroutes_reconcile($subsystem, $type)
         }
 
         $gateway_interface = $gateway['if'] ?? '';
+        $barrier_key = implode('|', [$family, $gatewayip, $gateway_interface, $type]);
+        if (!array_key_exists($barrier_key, $route_barriers)) {
+            $route_barriers[$barrier_key] = frr_carp_route_barrier(
+                $gatewayip,
+                $family,
+                $gateway_interface,
+                $type
+            );
+        }
+        $lookup = $route_barriers[$barrier_key];
+        if (!is_array($lookup)) {
+            // Never export a routed destination through an ownership path that
+            // failed to converge.  A later CARP/configuration event can restore
+            // it after the underlying route is healthy.
+            mwexecfm('/sbin/route delete -%s %s', [$family, $network]);
+            continue;
+        }
+
         if ($type === 'BACKUP') {
-            // ConnectedCarpEventHandler runs first and resolves this endpoint
-            // gateway through the current OSPF peer.  Use that peer next-hop
-            // directly for dependent routed destinations: FreeBSD otherwise
-            // keeps the native static route associated with the local CARP
-            // interface even while the gateway prefix itself is remote.
-            $lookup = frr_route_lookup($gatewayip, $family);
-            if (!is_array($lookup) ||
-                empty($lookup['gateway']) ||
+            // The barrier returns the confirmed peer path after native
+            // connected/RIB/FIB convergence. Rebind the dependent destination
+            // to that exact next-hop/interface; FreeBSD does not recursively
+            // move an already-installed static route to a different interface.
+            if (empty($lookup['gateway']) ||
                 empty($lookup['interface']) ||
                 $lookup['interface'] === $gateway_interface) {
-                // A local-looking route on BACKUP is never a valid fallback.
-                // Remove our owned destination rather than blackholing it on
-                // the non-owning endpoint interface.
                 mwexecfm('/sbin/route delete -%s %s', [$family, $network]);
                 continue;
             }
             $gatewayip = $lookup['gateway'];
             $gateway_interface = $lookup['interface'];
+        } elseif ($lookup['interface'] !== $gateway_interface) {
+            // MASTER must have regained the local endpoint path before its
+            // dependent routed destination is rebound/exported.
+            mwexecfm('/sbin/route delete -%s %s', [$family, $network]);
+            continue;
         }
 
         if (is_linklocal(strtok($gatewayip, '%')) && strpos($gatewayip, '%') === false && $gateway_interface !== '') {

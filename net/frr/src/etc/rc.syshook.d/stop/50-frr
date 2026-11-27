@@ -1,3 +1,0 @@
-#!/bin/sh
-
-/usr/local/opnsense/scripts/frr/carp_connected_control.sh stop

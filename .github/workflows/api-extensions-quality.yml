@@ -64,7 +64,7 @@ jobs:
         run: php sysutils/api-extensions/tests/test_mixed_version_v2.php
 
       - name: Run CARP health tests
-        run: python3 -m unittest sysutils/api-extensions/tests/test_carp_health.py
+        run: python3 -m unittest sysutils/api-extensions/tests/test_carp_health_lifecycle.py
 
       - name: Run CARP health WebGUI tests
         run: python3 -m unittest sysutils/api-extensions/tests/test_webgui.py

@@ -61,9 +61,10 @@ if (frr_carp_enabled()) {
     //      determine which actions to perform when reaching a certain state.
     mwexecfm('/usr/local/opnsense/scripts/frr/carp_event_handler');
 
-    // The syshook runs after the kernel has reached the reported CARP state.
-    // ConnectedCarpEventHandler above first reconciles reachability of the
-    // endpoint subnet; dependent native static routes can then be re-resolved
-    // against that actual local/peer path.
+    // CARP notification can precede native connected/RIB/FIB convergence.
+    // The targeted static-route reconciler therefore uses a PF_ROUTE
+    // subscribe-before-snapshot barrier before rebinding dependent routes.
+    // No connected-prefix fallback is written here; native FreeBSD/FRR owns
+    // that route selection.
     frr_carp_staticroutes_reconcile($subsystem, $type);
 }

@@ -37,6 +37,15 @@
 ACTION="$1"
 COMMAND="$2"
 
+case "$ACTION" in
+    start|restart)
+        if ! /usr/local/opnsense/scripts/frr/carp_connected_migrate.py; then
+            logger -t frr_wrapper "FRR CARP legacy fallback migration failed; refusing service $ACTION"
+            exit 75
+        fi
+        ;;
+esac
+
 /usr/sbin/service frr "$ACTION" "$COMMAND"
 SERVICE_EXIT_CODE=$?
 
@@ -52,10 +61,4 @@ if [ "$2" = "all" ]; then
     ) &
 fi
 
-# Keep the CARP/OSPF connected-route reconciler supervised whenever an OSPF
-# daemon is started or FRR starts all daemons. The monitor handles adjacency
-# convergence asynchronously and does not block watchfrr.
-if [ "$2" = "ospfd" ] || [ "$2" = "ospf6d" ] || [ "$2" = "all" ]; then
-    /usr/local/opnsense/scripts/frr/carp_connected_control.sh start
-fi
 exit $SERVICE_EXIT_CODE
