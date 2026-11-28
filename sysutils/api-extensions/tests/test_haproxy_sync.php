@@ -1105,6 +1105,59 @@ eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['healthcheck
 eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['servers'], 'server')), 'native MVC sees first synchronized server');
 eq(1, count(rows($emptyArrayResult['config']['OPNsense']['HAProxy']['backends'], 'backend')), 'native MVC sees first synchronized backend');
 
+// Native Config::toArray() represents one <servers> XML container as one outer
+// wrapper whose singular item contains all rows. A singleton receiver may start
+// as [["server" => row]]. Expanding a multi-server payload to one outer wrapper
+// per row would persist repeated <servers> siblings; native HAProxy then exposes
+// only the first server even though HAProxySync::inventory() can flatten all of
+// them. Keep one outer container and heal the malformed repeated-container shape.
+$multiServerPayload = $payload;
+$secondServer = $payload['objects'][1];
+$secondServer['object_name'] = 'origin-customer-example-2';
+$secondServer['data']['name'] = 'origin-customer-example-2';
+$multiServerPayload['objects'][] = $secondServer;
+
+$wrappedMultiReceiver = $createdConfig;
+$wrappedMultiReceiver['OPNsense']['HAProxy']['servers'] = [[
+    'server' => $serverRows[0],
+]];
+$wrappedMultiResult = HAProxySync::reconcile(
+    $wrappedMultiReceiver,
+    $multiServerPayload,
+    nextFactory('wrapped-multi-uuid-'),
+    nextFactory('wrapped-multi-id-')
+);
+$wrappedMultiServers = $wrappedMultiResult['config']['OPNsense']['HAProxy']['servers'];
+eq(true, array_is_list($wrappedMultiServers), 'native server container remains an outer list wrapper');
+eq(1, count($wrappedMultiServers), 'multiple synchronized servers stay in one native XML container');
+eq(true, isset($wrappedMultiServers[0]['server']), 'native outer wrapper retains singular server item');
+eq(2, count($wrappedMultiServers[0]['server']), 'native outer wrapper contains every synchronized server row');
+
+$malformedMultiReceiver = $wrappedMultiResult['config'];
+$malformedRows = $malformedMultiReceiver['OPNsense']['HAProxy']['servers'][0]['server'];
+$malformedMultiReceiver['OPNsense']['HAProxy']['servers'] = array_map(
+    fn($row) => ['server' => $row],
+    $malformedRows
+);
+$healedMultiResult = HAProxySync::reconcile(
+    $malformedMultiReceiver,
+    $multiServerPayload,
+    fn() => throw new RuntimeException('malformed-shape heal UUID factory should not run'),
+    fn() => throw new RuntimeException('malformed-shape heal id factory should not run')
+);
+eq(true, $healedMultiResult['changed'], 'repeated HAProxy server containers are normalized');
+$healedMultiServers = $healedMultiResult['config']['OPNsense']['HAProxy']['servers'];
+eq(1, count($healedMultiServers), 'malformed repeated server containers collapse to one native container');
+eq(2, count($healedMultiServers[0]['server']), 'healed native server container retains every row');
+
+$healedMultiStable = HAProxySync::reconcile(
+    $healedMultiResult['config'],
+    $multiServerPayload,
+    fn() => throw new RuntimeException('healed idempotent UUID factory should not run'),
+    fn() => throw new RuntimeException('healed idempotent id factory should not run')
+);
+eq(false, $healedMultiStable['changed'], 'healed native server container is idempotent');
+
 // The new Rigi accepts the old Etna v2 payload, stores normal policy
 // assignments, and immediately becomes a valid source for the reverse sync.
 $serializedEmpty = receiverBase();

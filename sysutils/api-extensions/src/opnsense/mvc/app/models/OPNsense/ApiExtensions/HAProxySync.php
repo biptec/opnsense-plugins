@@ -130,12 +130,12 @@ final class HAProxySync
             return '';
         }
 
-        // Preserve the shape already used by config.xml. OPNsense's HAProxy
-        // model can persist repeated nodes as [{"server": {...}}], while an
-        // in-memory reconcile commonly starts with {"server": {...}}. Writing
-        // the latter is normalized back to the former by OPNsense, so forcing a
-        // single canonical shape here would make every subsequent sync appear
-        // changed even though all object data and UUIDs are identical.
+        // Preserve the native HAProxy container shape. Config::toArray()
+        // represents one XML <servers> container as a one-element list whose
+        // "server" member is either a singleton row or a row list. It must not
+        // be expanded into one outer wrapper per row: write_config() would turn
+        // that into repeated <servers> siblings and the native HAProxy MVC model
+        // reads only the first container.
         if (is_array($current) && array_is_list($current)) {
             // An empty array carries no information about the persisted row
             // wrapper shape. Start from the canonical item container instead
@@ -153,7 +153,9 @@ final class HAProxySync
                 }
             }
             if ($wrapped) {
-                return array_map(fn($row) => [$item => $row], $rows);
+                return [[
+                    $item => count($rows) === 1 ? $rows[0] : $rows,
+                ]];
             }
             // A direct row list is accepted on read for defensive recovery, but
             // it is not a valid native MVC persistence shape. Canonicalize it
